@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sentinel V2</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0d;
+    --bg1: #141414;
+    --bg2: #1a1a1a;
+    --bg3: #222;
+    --border: #2a2a2a;
+    --border2: #333;
+    --text: #e8e8e8;
+    --text2: #888;
+    --text3: #555;
+    --accent: #ffffff;
+    --dim: #444;
+    --radius: 8px;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+
+  /* ── TOP BAR ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    height: 46px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 12px;
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text3);
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .status-dot.online { background: #4ade80; box-shadow: 0 0 6px #4ade8066; }
+  .status-dot.error  { background: #f87171; }
+
+  .topbar-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .tb-input {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 4px 8px;
+    height: 28px;
+  }
+  .tb-input:focus { outline: none; border-color: var(--dim); }
+
+  #modelSelect { width: 130px; cursor: pointer; }
+  #ollamaUrl   { width: 170px; }
+
+  .tb-btn {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text2);
+    padding: 0 10px;
+    height: 28px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tb-btn:hover { color: var(--text); border-color: var(--dim); }
+  .tb-btn.active { color: var(--text); border-color: #555; }
+
+  /* ── SYSTEM BAR ── */
+  #sysbar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+    padding: 8px 16px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .syscard {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    min-width: 0;
+  }
+  .syscard .label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .syscard .value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .syscard .bar {
+    height: 2px;
+    background: var(--border2);
+    border-radius: 1px;
+    margin-top: 4px;
+    overflow: hidden;
+  }
+  .syscard .bar-fill {
+    height: 100%;
+    border-radius: 1px;
+    background: var(--text2);
+    transition: width 0.4s;
+  }
+  .syscard .bar-fill.warn  { background: #fbbf24; }
+  .syscard .bar-fill.crit  { background: #f87171; }
+
+  /* ── MAIN LAYOUT ── */
+  #main {
+    display: flex;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ── */
+  #sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    background: var(--bg1);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-section {
+    padding: 10px 10px 6px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .cmd-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+    cursor: pointer;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    transition: background 0.1s, color 0.1s;
+    border-radius: 0;
+  }
+  .cmd-btn:hover { background: var(--bg2); color: var(--text); }
+  .cmd-btn .icon { font-size: 13px; width: 16px; text-align: center; flex-shrink: 0; }
+
+  #sidebar-divider {
+    margin: 6px 12px;
+    border: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .mode-label {
+    padding: 10px 12px 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+    cursor: pointer;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    transition: background 0.1s, color 0.1s;
+  }
+  .mode-btn:hover { background: var(--bg2); color: var(--text); }
+  .mode-btn.active { color: var(--text); background: var(--bg2); }
+  .mode-btn .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text3); flex-shrink: 0; }
+  .mode-btn.active .dot { background: #e8e8e8; }
+
+  /* ── CHAT AREA ── */
+  #chat-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+    min-width: 0;
+  }
+
+  #drop-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text);
+    border: 2px dashed var(--dim);
+    border-radius: 8px;
+    margin: 16px;
+    pointer-events: none;
+  }
+  #drop-overlay.active { display: flex; }
+  #drop-overlay .drop-icon { font-size: 36px; }
+
+  #msgs {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  #msgs::-webkit-scrollbar { width: 4px; }
+  #msgs::-webkit-scrollbar-track { background: transparent; }
+  #msgs::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .msg { display: flex; flex-direction: column; gap: 4px; max-width: 90%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .msg.ai   { align-self: flex-start; align-items: flex-start; }
+
+  .bubble {
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-sans);
+  }
+  .msg.user .bubble { background: var(--bg2); border-color: var(--border2); }
+  .msg.ai   .bubble { background: var(--bg1); border-color: var(--border); }
+  .bubble code, .bubble pre {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--bg3);
+    border-radius: 4px;
+    padding: 2px 5px;
+  }
+  .bubble pre { padding: 10px 12px; display: block; overflow-x: auto; margin: 6px 0; border: 1px solid var(--border2); }
+
+  .meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+  }
+
+  .typing-indicator {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    width: fit-content;
+  }
+  .typing-indicator span {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--text3);
+    animation: blink 1.2s infinite;
+  }
+  .typing-indicator span:nth-child(2){ animation-delay:.2s }
+  .typing-indicator span:nth-child(3){ animation-delay:.4s }
+  @keyframes blink { 0%,80%,100%{ opacity:0.2 } 40%{ opacity:1 } }
+
+  .sys-result {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    max-width: 560px;
+    overflow-x: auto;
+    color: var(--text2);
+    line-height: 1.7;
+  }
+  .sys-result .kv { display: flex; gap: 8px; }
+  .sys-result .k { color: var(--text3); min-width: 120px; }
+  .sys-result .v { color: var(--text); }
+
+  /* ── INPUT BAR ── */
+  #inputbar {
+    border-top: 1px solid var(--border);
+    background: var(--bg1);
+    padding: 10px 16px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  #input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+
+  #userInput {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text);
+    resize: none;
+    min-height: 40px;
+    max-height: 120px;
+    line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+  #userInput:focus { outline: none; border-color: var(--dim); }
+  #userInput::placeholder { color: var(--text3); }
+
+  .input-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border2);
+    background: var(--bg2);
+    color: var(--text2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    flex-shrink: 0;
+  }
+  .input-btn:hover { color: var(--text); border-color: var(--dim); }
+  .input-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .input-btn.recording { color: #f87171; border-color: #f87171; background: #1a0f0f; animation: rec-pulse 1s infinite; }
+  @keyframes rec-pulse { 0%,100%{ opacity:1 } 50%{ opacity:0.6 } }
+  .input-btn.send { background: var(--bg3); border-color: var(--dim); color: var(--text); }
+  .input-btn.send:hover { background: #2a2a2a; }
+
+  #statusbar {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text3);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ── FILE ATTACHMENT PREVIEW ── */
+  #file-preview {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text2);
+  }
+  #file-preview.visible { display: flex; }
+  #file-preview .fname { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #file-preview .remove-file { cursor: pointer; color: var(--text3); }
+  #file-preview .remove-file:hover { color: var(--text); }
+
+  /* ── SCROLLBAR ── */
+  select option { background: #1a1a1a; }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div class="logo">
+    <div class="status-dot" id="statusDot"></div>
+    SENTINEL V2
+  </div>
+  <div class="topbar-controls">
+    <input id="ollamaUrl" class="tb-input" type="text" value="http://localhost:11434" placeholder="Ollama URL" />
+    <select id="modelSelect" class="tb-input">
+      <option value="mistral">mistral</option>
+      <option value="llama3.2">llama3.2</option>
+      <option value="llama3.1">llama3.1</option>
+      <option value="gemma3">gemma3</option>
+      <option value="deepseek-r1">deepseek-r1</option>
+      <option value="phi3">phi3</option>
+      <option value="codellama">codellama</option>
+    </select>
+    <input id="backendUrl" class="tb-input" type="text" value="http://localhost:8765" placeholder="Backend URL" style="width:150px;" />
+    <button class="tb-btn" onclick="clearChat()">clear</button>
+    <button class="tb-btn" onclick="exportChat()">export</button>
+  </div>
+</div>
+
+<!-- SYSTEM BAR -->
+<div id="sysbar">
+  <div class="syscard">
+    <div class="label">CPU</div>
+    <div class="value" id="sc-cpu">—</div>
+    <div class="bar"><div class="bar-fill" id="sc-cpu-bar" style="width:0%"></div></div>
+  </div>
+  <div class="syscard">
+    <div class="label">RAM</div>
+    <div class="value" id="sc-mem">—</div>
+    <div class="bar"><div class="bar-fill" id="sc-mem-bar" style="width:0%"></div></div>
+  </div>
+  <div class="syscard">
+    <div class="label">Disk</div>
+    <div class="value" id="sc-disk">—</div>
+    <div class="bar"><div class="bar-fill" id="sc-disk-bar" style="width:0%"></div></div>
+  </div>
+  <div class="syscard">
+    <div class="label">GPU</div>
+    <div class="value" id="sc-gpu">—</div>
+    <div class="bar"><div class="bar-fill" id="sc-gpu-bar" style="width:0%"></div></div>
+  </div>
+  <div class="syscard">
+    <div class="label">GPU Mem</div>
+    <div class="value" id="sc-gpumem">—</div>
+    <div class="bar"><div class="bar-fill" id="sc-gpumem-bar" style="width:0%"></div></div>
+  </div>
+  <div class="syscard">
+    <div class="label">Uptime</div>
+    <div class="value" id="sc-uptime">—</div>
+  </div>
+  <div class="syscard">
+    <div class="label">Ollama</div>
+    <div class="value" id="sc-ollama">—</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sidebar-section">Quick Commands</div>
+
+    <button class="cmd-btn" onclick="quickCmd('sysinfo')"><span class="icon">⬡</span> System info</button>
+    <button class="cmd-btn" onclick="quickCmd('processes')"><span class="icon">≡</span> Processes</button>
+    <button class="cmd-btn" onclick="quickCmd('network')"><span class="icon">◈</span> Network</button>
+    <button class="cmd-btn" onclick="quickCmd('disk')"><span class="icon">◎</span> Disk usage</button>
+    <button class="cmd-btn" onclick="quickCmd('memory')"><span class="icon">▦</span> Memory</button>
+    <button class="cmd-btn" onclick="quickCmd('gpu')"><span class="icon">▣</span> GPU status</button>
+    <button class="cmd-btn" onclick="quickCmd('logs')"><span class="icon">▤</span> System logs</button>
+    <button class="cmd-btn" onclick="quickCmd('services')"><span class="icon">▷</span> Services</button>
+    <button class="cmd-btn" onclick="quickCmd('ports')"><span class="icon">◇</span> Open ports</button>
+    <button class="cmd-btn" onclick="quickCmd('env')"><span class="icon">$</span> Environment</button>
+
+    <hr id="sidebar-divider" />
+
+    <div class="mode-label">Mode</div>
+    <button class="mode-btn active" id="mode-assistant" onclick="setMode('assistant')"><span class="dot"></span>Assistant</button>
+    <button class="mode-btn" id="mode-sysadmin" onclick="setMode('sysadmin')"><span class="dot"></span>Sysadmin</button>
+    <button class="mode-btn" id="mode-developer" onclick="setMode('developer')"><span class="dot"></span>Developer</button>
+    <button class="mode-btn" id="mode-security" onclick="setMode('security')"><span class="dot"></span>Security</button>
+  </div>
+
+  <!-- CHAT -->
+  <div id="chat-panel" style="position:relative">
+    <div id="drop-overlay">
+      <div class="drop-icon">↓</div>
+      Drop file to attach
+    </div>
+
+    <div id="msgs"></div>
+
+    <div id="inputbar">
+      <div id="file-preview">
+        <span>📎</span>
+        <span class="fname" id="fp-name"></span>
+        <span class="remove-file" onclick="clearFile()">✕</span>
+      </div>
+
+      <div id="input-row">
+        <!-- file attach -->
+        <button class="input-btn" title="Attach file" onclick="document.getElementById('fileInput').click()">📎</button>
+        <input type="file" id="fileInput" style="display:none" onchange="onFileSelect(this)" />
+
+        <!-- mic -->
+        <button class="input-btn" id="micBtn" title="Voice input" onclick="toggleMic()">🎙</button>
+
+        <textarea id="userInput" rows="1" placeholder="Ask Sentinel anything..."></textarea>
+
+        <button class="input-btn send" id="sendBtn" title="Send" onclick="sendMessage()">↑</button>
+      </div>
+
+      <div id="statusbar">
+        <span id="status-left">ready</span>
+        <span id="status-right"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const msgsEl     = document.getElementById('msgs');
+const inputEl    = document.getElementById('userInput');
+const sendBtn    = document.getElementById('sendBtn');
+const statusLeft = document.getElementById('status-left');
+const statusRight= document.getElementById('status-right');
+const statusDot  = document.getElementById('statusDot');
+const micBtn     = document.getElementById('micBtn');
+
+let history = [];
+function scrollToBottom(force) {
+  if (force) {
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+    return;
+  }
+  const gap = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight;
+  if (gap < 150) msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+let currentMode = 'assistant';
+let attachedFile = null;
+let recognition = null;
+let isRecording = false;
+
+const MODES = {
+  assistant: `You are Sentinel V2, an advanced AI assistant modeled after J.A.R.V.I.S. You are direct, intelligent, precise, and slightly formal. You help with any task — technical or otherwise. Format code blocks with triple backticks. Keep responses concise unless depth is requested.`,
+  sysadmin: `You are Sentinel V2 in Sysadmin Mode. You are a senior Linux sysadmin AI. You know every corner of Linux: systemd, networking, storage, performance tuning, security hardening, package management. You give exact commands, explain what they do, and anticipate follow-up needs. Always prefer battle-tested approaches. Use technical precision.`,
+  developer: `You are Sentinel V2 in Developer Mode. You are an expert software engineer AI with deep knowledge of Python, JavaScript, Bash, Rust, Go, and systems programming. You write clean, idiomatic code, explain architecture decisions, debug efficiently, and follow best practices. Always provide working code examples.`,
+  security: `You are Sentinel V2 in Security Mode. You are a cybersecurity expert AI. You help with threat analysis, vulnerability assessment, hardening configurations, log analysis, network security, and defensive security practices. You are ethical and only assist with legitimate security tasks on systems the user owns or is authorized to test.`,
+};
+
+function getBackendUrl() {
+  return document.getElementById('backendUrl').value.trim().replace(/\/$/, '');
+}
+function getOllamaUrl() {
+  return document.getElementById('ollamaUrl').value.trim().replace(/\/$/, '');
+}
+
+function ts() {
+  return new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function addMsg(role, text, id) {
+  const div = document.createElement('div');
+  div.className = `msg ${role === 'user' ? 'user' : 'ai'}`;
+  if (id) div.id = id;
+  const label = role === 'user' ? 'YOU' : 'SENTINEL';
+  div.innerHTML = `<div class="bubble">${formatMsg(text)}</div><div class="meta">${label} — ${ts()}</div>`;
+  msgsEl.appendChild(div);
+  scrollToBottom();
+  return div;
+}
+
+function addTyping() {
+  const div = document.createElement('div');
+  div.className = 'msg ai';
+  div.id = 'typing';
+  div.innerHTML = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
+  msgsEl.appendChild(div);
+  scrollToBottom();
+}
+
+function removeTyping() {
+  const t = document.getElementById('typing');
+  if (t) t.remove();
+}
+
+function formatMsg(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${code.trim()}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`mode-${mode}`).classList.add('active');
+  statusLeft.textContent = `mode: ${mode}`;
+}
+
+async function sendMessage() {
+  let text = inputEl.value.trim();
+  if (!text && !attachedFile) return;
+  sendBtn.disabled = true;
+  statusLeft.textContent = 'processing...';
+
+  let userMsg = text;
+  let apiContent = text;
+
+  if (attachedFile) {
+    userMsg = `[📎 ${attachedFile.name}]\n${text || 'Analyze this file.'}`;
+    apiContent = `File: ${attachedFile.name}\n\nContent:\n${attachedFile.content}\n\n${text || 'Analyze this file.'}`;
+    clearFile();
+  }
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  addMsg('user', userMsg);
+  scrollToBottom(true);
+  history.push({ role: 'user', content: apiContent });
+  addTyping();
+
+  try {
+    const resp = await fetch(`${getOllamaUrl()}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: document.getElementById('modelSelect').value,
+        messages: [
+          { role: 'system', content: MODES[currentMode] },
+          ...history
+        ],
+        stream: true
+      })
+    });
+
+    if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
+
+    removeTyping();
+    const aiDiv = addMsg('ai', '', 'streaming-msg');
+    const bubble = aiDiv.querySelector('.bubble');
+    const meta = aiDiv.querySelector('.meta');
+
+    let full = '';
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = dec.decode(value);
+      for (const line of chunk.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const j = JSON.parse(line);
+          if (j.message && j.message.content) {
+            full += j.message.content;
+            bubble.innerHTML = formatMsg(full);
+            scrollToBottom();
+          }
+        } catch {}
+      }
+    }
+
+    aiDiv.removeAttribute('id');
+    history.push({ role: 'assistant', content: full });
+    statusLeft.textContent = `ready — ${ts()}`;
+    statusRight.textContent = `model: ${document.getElementById('modelSelect').value}`;
+
+  } catch (err) {
+    removeTyping();
+    addMsg('ai', `⚠ Connection failed: ${err.message}\n\nMake sure Ollama is running:\n  OLLAMA_ORIGINS="*" /snap/ollama/current/bin/ollama serve`);
+    statusLeft.textContent = 'error';
+  }
+
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+async function quickCmd(cmd) {
+  const backend = getBackendUrl();
+
+  const DIRECT = {
+    sysinfo: async () => {
+      const r = await fetch(`${backend}/system/info`);
+      if (!r.ok) throw new Error('backend offline');
+      const d = await r.json();
+      return JSON.stringify(d, null, 2);
+    },
+    processes: async () => {
+      const r = await fetch(`${backend}/system/processes?limit=12`);
+      if (!r.ok) throw new Error('backend offline');
+      const d = await r.json();
+      return d.processes.map(p =>
+        `PID ${p.pid}  CPU:${p.cpu_percent}%  MEM:${p.memory_percent}%  ${p.name}`
+      ).join('\n');
+    },
+    network: async () => {
+      const r = await fetch(`${backend}/system/network`);
+      if (!r.ok) throw new Error('backend offline');
+      return JSON.stringify(await r.json(), null, 2);
+    },
+    disk: async () => {
+      const r = await fetch(`${backend}/system/disks`);
+      if (!r.ok) throw new Error('backend offline');
+      const d = await r.json();
+      return d.partitions.map(p =>
+        `${p.mountpoint}  ${p.used_gb}/${p.total_gb} GB (${p.usage_pct}%)`
+      ).join('\n');
+    },
+    env: async () => {
+      const r = await fetch(`${backend}/env`);
+      if (!r.ok) throw new Error('backend offline');
+      const d = await r.json();
+      return Object.entries(d).map(([k,v]) => `${k}=${v}`).join('\n');
+    },
+  };
+
+  const OLLAMA = {
+    memory: 'Give me a detailed breakdown of memory usage on this Linux system including RAM and swap. What should I watch for?',
+    gpu: 'How do I check GPU status, temperature, VRAM usage, and utilization on Linux with an NVIDIA GPU? Give me the exact commands.',
+    logs: 'Show me how to check the most important system logs on Linux using journalctl. What are the key things to look for?',
+    services: 'Show me how to list all running systemd services, check their status, and identify any failed ones.',
+    ports: 'Show me how to list all open ports and active connections on Linux, including which process owns each port.',
+  };
+
+  if (DIRECT[cmd]) {
+    try {
+      statusLeft.textContent = `fetching ${cmd}...`;
+      const result = await DIRECT[cmd]();
+      addMsg('user', `[quick: ${cmd}]`);
+
+      const div = document.createElement('div');
+      div.className = 'msg ai';
+      div.innerHTML = `<div class="sys-result"><pre>${result}</pre></div><div class="meta">SENTINEL — ${ts()}</div>`;
+      msgsEl.appendChild(div);
+      scrollToBottom();
+      statusLeft.textContent = 'ready';
+    } catch (e) {
+      inputEl.value = `Show me ${cmd} information for my Linux system.`;
+      sendMessage();
+    }
+  } else if (OLLAMA[cmd]) {
+    inputEl.value = OLLAMA[cmd];
+    sendMessage();
+  }
+}
+
+function clearChat() {
+  msgsEl.innerHTML = '';
+  history = [];
+  addMsg('ai', 'SENTINEL V2 online. History cleared.');
+  statusLeft.textContent = 'ready';
+  statusRight.textContent = '';
+}
+
+function exportChat() {
+  const lines = [...msgsEl.querySelectorAll('.msg')].map(m => {
+    const role = m.classList.contains('user') ? 'YOU' : 'SENTINEL';
+    const text = m.querySelector('.bubble')?.innerText || '';
+    const time = m.querySelector('.meta')?.innerText || '';
+    return `[${time}] ${role}:\n${text}`;
+  });
+  const blob = new Blob([lines.join('\n\n---\n\n')], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `sentinel-v2-${Date.now()}.txt`;
+  a.click();
+}
+
+function onFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    attachedFile = { name: file.name, content: e.target.result };
+    document.getElementById('fp-name').textContent = file.name;
+    document.getElementById('file-preview').classList.add('visible');
+  };
+  if (file.type.startsWith('text') || file.name.match(/\.(py|js|ts|sh|md|txt|json|yaml|yml|toml|cfg|conf|log|csv|xml|html|css|rs|go|c|cpp|h|java)$/i)) {
+    reader.readAsText(file);
+  } else {
+    reader.readAsDataURL(file);
+  }
+  input.value = '';
+}
+
+function clearFile() {
+  attachedFile = null;
+  document.getElementById('file-preview').classList.remove('visible');
+}
+
+function toggleMic() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    addMsg('ai', 'Speech recognition is not supported in this browser. Try Chrome or Edge.');
+    return;
+  }
+
+  if (isRecording) {
+    recognition.stop();
+    return;
+  }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onstart = () => {
+    isRecording = true;
+    micBtn.classList.add('recording');
+    statusLeft.textContent = 'listening...';
+  };
+  recognition.onresult = e => {
+    const transcript = [...e.results].map(r => r[0].transcript).join('');
+    inputEl.value = transcript;
+  };
+  recognition.onend = () => {
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    statusLeft.textContent = 'ready';
+    if (inputEl.value.trim()) sendMessage();
+  };
+  recognition.onerror = e => {
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    statusLeft.textContent = `mic error: ${e.error}`;
+  };
+
+  recognition.start();
+}
+
+/* ── DRAG & DROP ── */
+const chatPanel = document.getElementById('chat-panel');
+const dropOverlay = document.getElementById('drop-overlay');
+
+chatPanel.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropOverlay.classList.add('active');
+});
+chatPanel.addEventListener('dragleave', e => {
+  if (!chatPanel.contains(e.relatedTarget)) dropOverlay.classList.remove('active');
+});
+chatPanel.addEventListener('drop', e => {
+  e.preventDefault();
+  dropOverlay.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    const fakeInput = { files: [file] };
+    onFileSelect(fakeInput);
+  }
+});
+
+/* ── AUTO-RESIZE TEXTAREA ── */
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+});
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+/* ── SYSTEM BAR UPDATES ── */
+function setBar(id, pct) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.width = pct + '%';
+  el.classList.toggle('warn', pct > 70 && pct <= 85);
+  el.classList.toggle('crit', pct > 85);
+}
+
+async function updateSysBar() {
+  const backend = getBackendUrl();
+  try {
+    const r = await fetch(`${backend}/system/info`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const d = await r.json();
+      document.getElementById('sc-cpu').textContent = `${d.cpu.usage_pct}%`;
+      setBar('sc-cpu-bar', d.cpu.usage_pct);
+      document.getElementById('sc-mem').textContent = `${d.memory.used_gb}/${d.memory.total_gb}G`;
+      setBar('sc-mem-bar', d.memory.usage_pct);
+      document.getElementById('sc-disk').textContent = `${d.disk.usage_pct}%`;
+      setBar('sc-disk-bar', d.disk.usage_pct);
+      document.getElementById('sc-uptime').textContent = d.uptime;
+
+      if (d.gpus && d.gpus.length > 0) {
+        const g = d.gpus[0];
+        document.getElementById('sc-gpu').textContent = `${g.utilization_pct}%`;
+        setBar('sc-gpu-bar', g.utilization_pct);
+        const gmPct = Math.round(g.memory_used_mb / g.memory_total_mb * 100);
+        document.getElementById('sc-gpumem').textContent = `${Math.round(g.memory_used_mb/1024*10)/10}/${Math.round(g.memory_total_mb/1024)}G`;
+        setBar('sc-gpumem-bar', gmPct);
+      } else {
+        document.getElementById('sc-gpu').textContent = 'n/a';
+        document.getElementById('sc-gpumem').textContent = 'n/a';
+      }
+    }
+  } catch {}
+}
+
+async function checkOllama() {
+  try {
+    const r = await fetch(`${getOllamaUrl()}/api/tags`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const d = await r.json();
+      const count = d.models?.length || 0;
+      document.getElementById('sc-ollama').textContent = `${count} model${count !== 1 ? 's' : ''}`;
+      statusDot.className = 'status-dot online';
+
+      if (d.models?.length) {
+        const names = d.models.map(m => m.name.split(':')[0]);
+        const sel = document.getElementById('modelSelect');
+        for (const opt of sel.options) {
+          if (names.includes(opt.value)) { sel.value = opt.value; break; }
+        }
+      }
+    } else {
+      throw new Error();
+    }
+  } catch {
+    document.getElementById('sc-ollama').textContent = 'offline';
+    statusDot.className = 'status-dot error';
+  }
+}
+
+/* ── INIT ── */
+addMsg('ai', 'SENTINEL V2 online.\n\nCapabilities:\n  ↑ Voice input (mic button)\n  📎 File analysis (attach or drag & drop)\n  ⬡ Real system metrics (requires backend)\n  ≡ Mode switching (sidebar)\n\nTo enable full system access, start the backend:\n  bash setup.sh\n\nHow can I assist?');
+
+checkOllama();
+updateSysBar();
+setInterval(updateSysBar, 8000);
+setInterval(checkOllama, 30000);
+
+document.getElementById('backendUrl').addEventListener('change', updateSysBar);
+document.getElementById('ollamaUrl').addEventListener('change', checkOllama);
+</script>
+
+<script>
+// Fix layout height for Chrome - calculate exact remaining height
+function fixLayout() {
+  const topbar = document.getElementById('topbar');
+  const sysbar = document.getElementById('sysbar');
+  const main = document.getElementById('main');
+  const used = topbar.offsetHeight + sysbar.offsetHeight;
+  main.style.position = 'fixed';
+  main.style.top = used + 'px';
+  main.style.left = '0';
+  main.style.right = '0';
+  main.style.bottom = '0';
+}
+fixLayout();
+window.addEventListener('resize', fixLayout);
+</script>
+</body>
+</html>
