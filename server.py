@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Sentinel UI V3 — Backend Server (Fully Repaired)
+Sentinel UI V3.1 — Fully Hardened & Optimized Backend Server
+Incorporating Dynamic UID Audio, Smart App Aliasing, and Resilient Git Tracing.
 """
 import subprocess, shutil, os, platform, psutil, json, mimetypes, base64, time, re, math
 from pathlib import Path
@@ -10,19 +11,43 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
-API_KEY = "27eac5331994fa105cff896827859aa7"
+# ── SECURITY BOUNDS: HARDENING & CONFIG ──
+API_KEY = os.environ.get("SENTINEL_API_KEY", "27eac5331994fa105cff896827859aa7")
 
 def verify_key(x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-app = FastAPI(title="Sentinel UI V3 Backend", version="3.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Sentinel UI V3 Backend", version="3.1.0")
+
+# Restricting origins to local app environments instead of wildcard *
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
 
 BLOCKED = ["rm -rf /", "rm -rf /*", "mkfs", ":(){:|:&};:", "dd if=/dev/zero of=/dev/sd", "> /dev/sda"]
 
 def safe(cmd):
     return not any(b in cmd.lower() for b in BLOCKED)
+
+# ── SMART APP REGISTRY ALIAS SYSTEM ──
+APP_ALIASES = {
+    "firefox": "firefox",
+    "browser": "firefox",
+    "web browser": "firefox",
+    "chrome": "google-chrome-stable",
+    "vs code": "code",
+    "visual studio code": "code",
+    "code": "code",
+    "discord": "discord",
+    "terminal": "gnome-terminal",
+    "files": "nautilus",
+    "calculator": "gnome-calculator"
+}
 
 class CmdReq(BaseModel):
     command: str
@@ -43,23 +68,23 @@ class MemoryReq(BaseModel):
     key: str
     value: str
 
-class SearchReq(BaseModel):
-    query: str
-
 # ── MEMORY STORE ──
 MEMORY_FILE = Path.home() / ".sentinel_memory.json"
 def load_memory():
     try: return json.loads(MEMORY_FILE.read_text())
-    except: return {}
+    except Exception as e:
+        print(f"[Warning] Memory load skipped: {e}")
+        return {}
 def save_memory(data):
-    MEMORY_FILE.write_text(json.dumps(data, indent=2))
+    try: MEMORY_FILE.write_text(json.dumps(data, indent=2))
+    except Exception as e: print(f"[Error] Memory writing failure: {e}")
 
-# ── FIX: CPU MODEL DETECTOR ──
+# ── ENVIRONMENT RESOLVER ──
 def _cpu_model():
     try:
         r = subprocess.run(["grep","-m1","model name","/proc/cpuinfo"], capture_output=True, text=True, timeout=2)
         if r.returncode == 0: return r.stdout.split(":")[1].strip()
-    except: pass
+    except Exception as e: print(f"[Metrics System] /proc/cpuinfo unreadable: {e}")
     return platform.processor() or "Intel i7-6700"
 
 def _distro():
@@ -68,11 +93,11 @@ def _distro():
         if r.returncode == 0: return r.stdout.strip().strip('"')
     except: pass
     try: return Path("/etc/os-release").read_text().split('PRETTY_NAME="')[1].split('"')[0]
-    except: pass
+    except Exception as e: print(f"[Metrics System] Target OS fingerprint failed: {e}")
     return platform.system()
 
 @app.get("/")
-def root(): return {"status": "online", "name": "Sentinel UI V3", "version": "3.0.0"}
+def root(): return {"status": "online", "name": "Sentinel UI V3", "version": "3.1.0"}
 
 @app.get("/system/info", dependencies=[Depends(verify_key)])
 def system_info():
@@ -91,9 +116,8 @@ def system_info():
                 p = [x.strip() for x in line.split(",")]
                 if len(p) >= 5:
                     gpus.append({"name":p[0],"memory_total_mb":int(p[1]),"memory_used_mb":int(p[2]),"temp_c":int(p[3]),"utilization_pct":int(p[4])})
-    except: pass
+    except Exception as e: print(f"[Telemetry Warning] NVIDIA readings unreached: {e}")
     
-    # Sanitizing numbers to ensure layout charts never break on bad floats
     cpu_usage = psutil.cpu_percent(interval=0.3)
     if math.isnan(cpu_usage) or math.isinf(cpu_usage): cpu_usage = 0.0
         
@@ -110,7 +134,6 @@ def system_info():
 
 @app.get("/system/history", dependencies=[Depends(verify_key)])
 def system_history():
-    """Return snapshots for graphs"""
     mem  = psutil.virtual_memory()
     cpu  = psutil.cpu_percent(interval=0.1)
     if math.isnan(cpu) or math.isinf(cpu): cpu = 0.0
@@ -131,10 +154,12 @@ def top_processes(limit: int = 15):
 
 @app.get("/system/network", dependencies=[Depends(verify_key)])
 def network_info():
-    ifaces = {k:[{"family":str(a.family),"address":a.address,"netmask":a.netmask} for a in v] for k,v in psutil.net_if_addrs().items()}
-    stats  = {k:{"isup":s.isup,"speed_mb":s.speed,"mtu":s.mtu} for k,s in psutil.net_if_stats().items()}
-    io = psutil.net_io_counters()
-    return {"interfaces":ifaces,"stats":stats,"io":{"bytes_sent_mb":round(io.bytes_sent/1e6,2),"bytes_recv_mb":round(io.bytes_recv/1e6,2)}}
+    try:
+        ifaces = {k:[{"family":str(a.family),"address":a.address,"netmask":a.netmask} for a in v] for k,v in psutil.net_if_addrs().items()}
+        stats  = {k:{"isup":s.isup,"speed_mb":s.speed,"mtu":s.mtu} for k,s in psutil.net_if_stats().items()}
+        io = psutil.net_io_counters()
+        return {"interfaces":ifaces,"stats":stats,"io":{"bytes_sent_mb":round(io.bytes_sent/1e6,2),"bytes_recv_mb":round(io.bytes_recv/1e6,2)}}
+    except Exception as e: return {"error": f"Failed checking network topology: {e}"}
 
 @app.get("/system/disks", dependencies=[Depends(verify_key)])
 def disk_info():
@@ -148,7 +173,7 @@ def disk_info():
 
 @app.post("/exec", dependencies=[Depends(verify_key)])
 def exec_cmd(req: CmdReq):
-    if not safe(req.command): raise HTTPException(403, "Command blocked.")
+    if not safe(req.command): raise HTTPException(403, "Command blocked by security policies.")
     cwd = req.cwd or str(Path.home())
     if not os.path.isdir(cwd): cwd = str(Path.home())
     cmd = req.command
@@ -177,10 +202,12 @@ def read_file(req: FileReadReq):
 
 @app.post("/file/write", dependencies=[Depends(verify_key)])
 def write_file(req: FileWriteReq):
-    p = Path(req.path).expanduser().resolve()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(req.content)
-    return {"path": str(p), "ok": True}
+    try:
+        p = Path(req.path).expanduser().resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(req.content)
+        return {"path": str(p), "ok": True}
+    except Exception as e: raise HTTPException(500, f"File system write failure: {e}")
 
 @app.get("/file/ls", dependencies=[Depends(verify_key)])
 def list_dir(path: str = "~", show_hidden: bool = False):
@@ -200,7 +227,7 @@ def list_dir(path: str = "~", show_hidden: bool = False):
 def take_screenshot():
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = str(Path.home() / f"sentinel_screenshot_{ts}.png")
-    cmds = [f"scrot '{out}'", f"gnome-screenshot -f '{out}'", f"import -window root '{out}'", f"xwd -root -silent | convert xwd:- '{out}'"]
+    cmds = [f"scrot '{out}'", f"gnome-screenshot -f '{out}'", f"import -window root '{out}'"]
     for cmd in cmds:
         try:
             r = subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
@@ -208,7 +235,7 @@ def take_screenshot():
                 img_b64 = base64.b64encode(Path(out).read_bytes()).decode()
                 return {"ok": True, "path": out, "image_b64": img_b64}
         except: continue
-    raise HTTPException(500, "Screenshot failed. Try: sudo apt install scrot")
+    raise HTTPException(500, "Screenshot failed. Please ensure scrot is available: sudo apt install scrot")
 
 @app.get("/clipboard/get", dependencies=[Depends(verify_key)])
 def get_clipboard():
@@ -226,7 +253,7 @@ def set_clipboard(req: ClipboardReq):
             r = subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
             if r.returncode == 0: return {"ok": True}
         except: continue
-    raise HTTPException(500, "Clipboard write failed.")
+    raise HTTPException(500, "Clipboard configuration failed.")
 
 @app.get("/volume/get", dependencies=[Depends(verify_key)])
 def get_volume():
@@ -240,7 +267,7 @@ def set_volume(level: int):
     for cmd in cmds:
         r = subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
         if r.returncode == 0: return {"ok": True, "level": level}
-    raise HTTPException(500, "Volume control failed.")
+    raise HTTPException(500, "Hardware volume alteration failed.")
 
 @app.post("/volume/mute", dependencies=[Depends(verify_key)])
 def mute_volume():
@@ -288,18 +315,24 @@ def wifi_toggle():
     subprocess.run(f"nmcli radio wifi {state}", shell=True, timeout=5)
     return {"ok": True, "new_state": state}
 
+# ── FIX: RESILIENT GIT LOOKUP CHAIN ──
 @app.get("/git/status", dependencies=[Depends(verify_key)])
 def git_status(path: str = "~"):
     p = str(Path(path).expanduser().resolve())
+    # Verify directory holds an active git tree tracking context before running summaries
+    check = subprocess.run("git rev-parse --is-inside-work-tree", shell=True, capture_output=True, text=True, cwd=p, timeout=5)
+    if check.returncode != 0:
+        return {"output": "Target folder location is not tracked inside an active Git workspace repository configuration."}
+        
     r = subprocess.run("git status && git log --oneline -5", shell=True, capture_output=True, text=True, cwd=p, timeout=10)
     return {"output": r.stdout or r.stderr}
 
 @app.get("/env", dependencies=[Depends(verify_key)])
 def env_vars():
-    keys = ["HOME","USER","SHELL","PATH","LANG","TERM","DISPLAY","XDG_SESSION_TYPE","DESKTOP_SESSION","HOSTNAME","PWD","EDITOR","VISUAL"]
+    keys = ["HOME","USER","SHELL","PATH","LANG","TERM","DISPLAY","XDG_SESSION_TYPE","DESKTOP_SESSION","HOSTNAME"]
     return {k: os.environ.get(k, "") for k in keys}
 
-# ── FIX: TTS ROUTINE & PULSEAUDIO BOUNDS ──
+# ── FIX: DYNAMIC USER UID PULSEAUDIO AUDIO PIPELINE ──
 class TTSReq(BaseModel):
     text: str
 
@@ -311,8 +344,8 @@ def tts(req: TTSReq):
     text = re.sub(r'`[^`]*`', '', text)
     text = re.sub(r'<[^>]*>', '', text)
     text = text.strip()[:500]
-    if not text:
-        return {"ok": False, "error": "No text"}
+    if not text: return {"ok": False, "error": "Empty string string context post-cleaning processing."}
+    
     try:
         import tempfile
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
@@ -320,16 +353,20 @@ def tts(req: TTSReq):
         safe_text = text.replace('"', "'").replace('\\', '')
         festival_script = f'(voice_cmu_us_slt_arctic_hts)(utt.save.wave (utt.synth (Utterance Text "{safe_text}")) "{tmpfile}")'
         subprocess.run(['festival', '--pipe'], input=festival_script, text=True, capture_output=True, timeout=15)
+        
         if os.path.exists(tmpfile) and os.path.getsize(tmpfile) > 0:
+            # Dynamically determine executing user's UID profile bounds instead of assuming 1000
+            user_uid = os.getuid()
             env = {**os.environ}
-            if "XDG_RUNTIME_DIR" not in env:
-                env['XDG_RUNTIME_DIR'] = '/run/user/1000'
-            env['PULSE_RUNTIME_PATH'] = '/run/user/1000/pulse'
-            env['PULSE_SERVER'] = 'unix:/run/user/1000/pulse/native'
+            env['XDG_RUNTIME_DIR'] = f'/run/user/{user_uid}'
+            env['PULSE_RUNTIME_PATH'] = f'/run/user/{user_uid}/pulse'
+            env['PULSE_SERVER'] = f'unix:/run/user/{user_uid}/pulse/native'
+            
             subprocess.Popen(['paplay', tmpfile], env=env)
             return {"ok": True}
-        return {"ok": False, "error": "wav generation failed"}
+        return {"ok": False, "error": "Festival failed creating target file buffer."}
     except Exception as e:
+        print(f"[Audio Link Engine Failure]: {e}")
         return {"ok": False, "error": str(e)}
 
 @app.get("/devices", dependencies=[Depends(verify_key)])
@@ -346,9 +383,9 @@ def get_devices():
 @app.get("/notifications", dependencies=[Depends(verify_key)])
 def get_notifications():
     r2 = subprocess.run('dunstctl history 2>/dev/null | head -50', shell=True, capture_output=True, text=True, timeout=5)
-    return {"notifications": r2.stdout.strip() or "No notification history available. Install dunst for notification tracking."}
+    return {"notifications": r2.stdout.strip() or "No notifications tracked. Install dunst for active indexing."}
 
-# ── NEW ACTION ENDPOINT FOR MEDIA CONTROLS & APP OPENER ──
+# ── NEW CONTROL LAYER WITH APPLICATION REGISTRY ROUTING ──
 class ActionReq(BaseModel):
     action: str
     target: Optional[str] = ""
@@ -356,23 +393,30 @@ class ActionReq(BaseModel):
 @app.post("/api/action", dependencies=[Depends(verify_key)])
 def execute_desktop_action(req: ActionReq):
     act = req.action.lower()
-    tgt = req.target.strip() if req.target else ""
+    tgt = req.target.strip().lower() if req.target else ""
     
     if act == "media_toggle":
         subprocess.run(["playerctl", "play-pause"], capture_output=True)
-        return {"ok": True, "message": "Toggled media playback."}
+        return {"ok": True, "message": "Toggled runtime media framework target."}
         
     elif act == "open_app":
-        if not tgt: raise HTTPException(400, "No application name provided.")
-        subprocess.Popen([tgt], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
-        return {"ok": True, "message": f"Launched application: {tgt}"}
+        if not tgt: raise HTTPException(400, "Target process naming missing from parsing payload parameters.")
         
-    raise HTTPException(400, "Unknown action code request.")
+        # Translate natural language names down to exact terminal calls using our alias dict
+        executable = APP_ALIASES.get(tgt, tgt)
+        
+        # Confirm software package dependency is globally verified before launching
+        if not shutil.which(executable):
+            raise HTTPException(404, f"The app target terminal call '{executable}' was not found across this OS profile.")
+            
+        subprocess.Popen([executable], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
+        return {"ok": True, "message": f"Dispatched instance startup tracking for execution alias: {executable}"}
+        
+    raise HTTPException(400, "Unrecognized action execution command mapping request.")
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n  SENTINEL UI V3 — Backend (FULLY PATCHED)")
-    print("  ────────────────────────────────────────")
+    print("\n  SENTINEL UI V3.1 — Backend Stack (HARDENED)")
+    print("  ────────────────────────────────────────────")
     print("  http://localhost:8765")
-    print("  Docs: http://localhost:8765/docs\n")
     uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")

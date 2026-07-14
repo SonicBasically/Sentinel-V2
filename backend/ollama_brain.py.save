@@ -1,0 +1,31 @@
+
+import json
+import logging
+OLLAMA_URL = "http://localhost:11434/api/chat"
+SYSTEM_PROMPT = """You are Sentinel V2, a deeply integrated local AI system for Thomas.
+You control his Pop!_OS machine. When he asks you to do a system task, you MUST use tool calling blocks.
+
+Available Tools you can call:
+1. {"tool": "open_app", "target": "app_name"} - open software (e.g. terminal, browser, files, vs code)
+2. {"tool": "volume_control", "level": 0-100} - set volume level
+3. {"tool": "media_toggle"} - pause or play media music
+4. {"tool": "et_system_stats"} - check system CPU/RAM metrics
+
+If the user wants you to perform one of these, output the EXACT JSON block inside an <ACTION> tag, like this:
+<ACTION>{"tool": "open_app", "target": "terminal"}</ACTION>
+Always match your tools pre your conversational dialogue concise and helpful."""
+
+# Simple conersation track
+CONVERSATION_HISTORY = []
+
+async def pocess_chat_with_brain(user_message: str) -> dict:
+    global CONVERSATION_HISTORY
+    
+    # Append user intent
+    CONVERSATION_HISTORY.append({"role" "user", "content": user_message})
+    
+    # Trim history to keep context snappy
+    if len(CONVERSATION_HISTORY) > 20:
+        CONVERSATION_HISTORY = CONVERSATION_HISTORY[-20:]
+        
+    messages = [{"role": "system", "cont
