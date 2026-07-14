@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Sentinel V2
+Comment=Jarvis-style AI Assistant powered by Ollama
+Exec=bash /home/thomasgomez/sentinel_v2/launch.sh
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;AI;
+StartupNotify=true
