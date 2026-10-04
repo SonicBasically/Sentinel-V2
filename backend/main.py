@@ -48,6 +48,7 @@ class FilePayload(BaseModel):
 voice_task = None
 mic_active = False
 vosk_model = None
+last_voice_response = None  # Stores latest voice reply for frontend polling
 
 def get_vosk_model():
     global vosk_model
@@ -98,8 +99,12 @@ async def continuous_mic_capture():
         print("[Voice Stack] Microphone successfully powered down.")
 
 async def handle_voice_intent(text: str):
+    global last_voice_response
     print(f"[Brain Routing] Processing Voice Command: '{text}'...")
-    await process_chat_with_brain(text)
+    result = await process_chat_with_brain(text)
+    clean_reply = re.sub(r"<ACTION>[\s\S]*?</ACTION>", "", result["reply"]).strip()
+    last_voice_response = {"transcript": text, "reply": clean_reply, "seen": False}
+    print(f"[Brain Response]: {clean_reply[:80]}...")
 
 @app.post("/api/voice/start", dependencies=[Depends(verify_key)])
 async def start_voice_listening():
@@ -122,6 +127,14 @@ async def stop_voice_listening():
         voice_task.cancel()
         voice_task = None
     return {"status": "listening_stopped"}
+
+@app.get("/api/voice/last_response", dependencies=[Depends(verify_key)])
+async def get_last_voice_response():
+    global last_voice_response
+    if last_voice_response and not last_voice_response["seen"]:
+        last_voice_response["seen"] = True
+        return {"status": "new", "transcript": last_voice_response["transcript"], "reply": last_voice_response["reply"]}
+    return {"status": "empty"}
 
 @app.post("/api/chat", dependencies=[Depends(verify_key)])
 async def chat_endpoint(payload: ChatPayload):

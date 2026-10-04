@@ -65,6 +65,8 @@ echo "  Ollama:   http://localhost:11434"
 echo "  UI:       http://localhost:8766/sentinel_ui_v3.html"
 echo ""
 echo "  📱 Phone: http://$LOCAL_IP:8766/sentinel_ui_v3.html"
+SENTINEL_KEY_VAL=$(grep '^SENTINEL_API_KEY=' "$HOME/.config/sentinel/.env" 2>/dev/null | cut -d= -f2- | tr -d '"')
+echo "  🔑 API key: ${SENTINEL_KEY_VAL:-NOT FOUND — check ~/.config/sentinel/.env}"
 echo ""
 echo "  Press Ctrl+C to stop."
 echo ""

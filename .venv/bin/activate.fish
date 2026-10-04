@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV '/mnt/ogdrive/Sentinal V2/.venv'
+set -gx VIRTUAL_ENV /mnt/ogdrive/GitHub/Sentinel-V2/.venv
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH

@@ -15,8 +15,7 @@ if not API_KEY:
                 API_KEY = line.split("=", 1)[1].strip('"')
                 
 if not API_KEY:
-    # Safe backup fallback for local setup if environment setup hasn't occurred yet
-    API_KEY = "27eac5331994fa105cff896827859aa7"
+    raise RuntimeError("SENTINEL_API_KEY not set (env var or ~/.config/sentinel/.env)")
 
 def verify_key(x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:

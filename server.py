@@ -12,7 +12,15 @@ from pydantic import BaseModel
 from typing import Optional
 
 # ── SECURITY BOUNDS: HARDENING & CONFIG ──
-API_KEY = os.environ.get("SENTINEL_API_KEY", "27eac5331994fa105cff896827859aa7")
+API_KEY = os.environ.get("SENTINEL_API_KEY")
+if not API_KEY:
+    _cfg = Path.home() / ".config" / "sentinel" / ".env"
+    if _cfg.exists():
+        for _line in _cfg.read_text().splitlines():
+            if _line.startswith("SENTINEL_API_KEY="):
+                API_KEY = _line.split("=", 1)[1].strip().strip('"')
+if not API_KEY:
+    raise RuntimeError("SENTINEL_API_KEY not set (env var or ~/.config/sentinel/.env)")
 
 def verify_key(x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
@@ -23,7 +31,8 @@ app = FastAPI(title="Sentinel UI V3 Backend", version="3.1.0")
 # Restricting origins to local app environments instead of wildcard *
 app.add_middleware(
     CORSMiddleware, 
-    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"], 
+    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"],
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net):(8765|8766)$",
     allow_credentials=True, 
     allow_methods=["*"], 
     allow_headers=["*"]

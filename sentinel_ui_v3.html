@@ -359,6 +359,7 @@ var currentMode='assistant';
 var attached=null;
 var recog=null;
 var recording=false;
+var voicePollInterval=null;
 var ttsEnabled=false;
 var graphData={cpu:[],mem:[],gpu:[]};
 var MAX_PTS=40;
@@ -367,7 +368,11 @@ var availableModels=[];
 var MODEL_ROUTES={vision:'moondream',code:'codellama',default:'mistral'};
 
 // Auto-detect host — if accessed from another device, use that device's IP
-var API_KEY='27eac5331994fa105cff896827859aa7';
+   var API_KEY = localStorage.getItem('sentinel_api_key') || '';
+   if(!API_KEY){
+     API_KEY = (prompt('Enter Sentinel API key:')||'').trim();
+     if(API_KEY) localStorage.setItem('sentinel_api_key', API_KEY);
+   }
 
 var _host = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
   ? window.location.hostname
@@ -1020,41 +1025,62 @@ chatEl.addEventListener('drop',function(e){e.preventDefault();dropEl.classList.r
 textarea.addEventListener('input',function(){textarea.style.height='auto';textarea.style.height=Math.min(textarea.scrollHeight,120)+'px';});
 textarea.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 
-function toggleMic(){
-  var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){addMsg('ai','Speech recognition requires Chrome.');return;}
-  if(recording){
-    recording=false;recog.stop();micBtn.classList.remove('rec');
-    textarea.placeholder='Ask Sentinel anything...';stL.textContent='ready';
-    if(textarea.value.trim())send();return;
-  }
-  recog=new SR();recog.continuous=true;recog.interimResults=true;recog.lang='en-US';recog.maxAlternatives=1;
-  var final='';
-  recog.onstart=function(){recording=true;final='';micBtn.classList.add('rec');textarea.value='';textarea.placeholder='Listening...';stL.textContent='🎙 listening — click mic to stop & send';};
-  recog.onresult=function(e){
-    var interim='';
-    for(var i=e.resultIndex;i<e.results.length;i++){var t=e.results[i][0].transcript;e.results[i].isFinal?final+=t+' ':interim=t;}
-    textarea.value=(final+interim).trim();
-    textarea.style.height='auto';textarea.style.height=Math.min(textarea.scrollHeight,120)+'px';
-    stL.textContent='🎙 "'+(final+interim).trim().slice(-50)+'"';
-  };
-  recog.onend=function(){
-    if(recording){
-      // Auto-restart if we're still in recording mode (Chrome stops after silence)
-      try { recog.start(); } catch(e) {
-        recording=false;micBtn.classList.remove('rec');
-        textarea.placeholder='Ask Sentinel anything...';stL.textContent='ready';
-        if(textarea.value.trim())send();
+function startVoicePolling(){
+  if(voicePollInterval) return;
+  voicePollInterval=setInterval(async function(){
+    try{
+      var r=await bfetch(backend()+'/api/voice/last_response');
+      if(!r.ok) return;
+      var d=await r.json();
+      if(d.status==='new'){
+        addMsg('user',d.transcript);
+        addMsg('ai',d.reply);
+        speak(d.reply);
       }
-    }
-  };
-  recog.onerror=function(e){
-    if(e.error==='no-speech'){ try{recog.start();}catch(err){} return; }
-    recording=false;micBtn.classList.remove('rec');
+    }catch(e){ /* silent — backend may just be busy */ }
+  },1000);
+}
+
+function stopVoicePolling(){
+  if(voicePollInterval){ clearInterval(voicePollInterval); voicePollInterval=null; }
+}
+
+async function toggleMic(){
+  if(recording){
+    recording=false;
+    micBtn.classList.remove('rec');
     textarea.placeholder='Ask Sentinel anything...';
-    stL.textContent=e.error==='not-allowed'?'mic blocked — check Chrome permissions':'mic: '+e.error;
-  };
-  recog.start();
+    stL.textContent='stopping mic...';
+    stopVoicePolling();
+    try{
+      await bfetch(backend()+'/api/voice/stop',{method:'POST'});
+      stL.textContent='ready';
+    }catch(e){
+      stL.textContent='mic stop error: '+e.message;
+    }
+    return;
+  }
+
+  recording=true;
+  micBtn.classList.add('rec');
+  textarea.placeholder='Listening (server-side)...';
+  stL.textContent='🎙 mic engaged — speak now';
+  try{
+    var r=await bfetch(backend()+'/api/voice/start',{method:'POST'});
+    if(!r.ok){
+      recording=false;
+      micBtn.classList.remove('rec');
+      textarea.placeholder='Ask Sentinel anything...';
+      stL.textContent='mic start failed: HTTP '+r.status;
+      return;
+    }
+    startVoicePolling();
+  }catch(e){
+    recording=false;
+    micBtn.classList.remove('rec');
+    textarea.placeholder='Ask Sentinel anything...';
+    stL.textContent='mic start error: '+e.message;
+  }
 }
 
 function setBar(id,pct){var el=document.getElementById(id);if(!el)return;el.style.width=pct+'%';el.className='sc-f'+(pct>85?' crit':pct>70?' warn':'');}

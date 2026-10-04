@@ -1,6 +1,4 @@
-#!/bin/sh
-'''exec' "/mnt/ogdrive/Sentinal V2/.venv/bin/python3" "$0" "$@"
-' '''
+#!/mnt/ogdrive/GitHub/Sentinel-V2/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
