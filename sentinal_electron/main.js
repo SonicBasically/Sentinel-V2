@@ -8,7 +8,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 
 const HOME = process.env.HOME || '/home/thomasgomez';
-const PROJECT_DIR = path.join(HOME, 'Desktop/OG_Drive/Sentinal V2');
+const PROJECT_DIR = path.join(HOME, 'Desktop/OG_Drive/GitHub/Sentinel-V2');
 const VENV_PYTHON = path.join(PROJECT_DIR, '.venv/bin/python');
 const SERVER_PY = path.join(PROJECT_DIR, 'server.py');
 const OLLAMA_BIN = '/snap/ollama/current/bin/ollama';
@@ -117,7 +117,7 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    if (!process.env.SENTINEL_QUIET) mainWindow.webContents.openDevTools({ mode: 'detach' });
   });
 
   mainWindow.on('close', e => {

@@ -1,1 +1,15 @@
 sentinal_electron/node_modules/
+
+# Claude <-> ChatGPT notes (local only)
+comms/
+
+# Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+backend/venv/

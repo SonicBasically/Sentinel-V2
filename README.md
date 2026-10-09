@@ -1,66 +1,106 @@
 # Sentinel V2
 
-A Jarvis-style AI assistant powered by Ollama with full Linux system access.
+A locally-hosted, Jarvis-style AI assistant for a Linux desktop. A local LLM (via Ollama)
+does the thinking; a small FastAPI backend lets it control the computer; a single-page UI
+(also wrapped in Electron) is how you talk to it. Everything runs on your own machine.
 
-## Quick Start
+Built and tested on Pop!_OS 24.04. A personal hobby project, so expect rough edges.
+
+## What it can do
+
+- **Chat** with streaming replies from local Ollama models
+- **Modes** - Assistant, Sysadmin, Developer, Security. The UI picks one automatically from
+  your message (or you can pin one), and each mode loads its own context doc from `modes/`
+- **System control** - live CPU/RAM/disk/GPU stats, processes, network, shell commands,
+  files, screenshots, clipboard, volume, brightness, Wi-Fi, git status
+- **Media player** - music library, playlists (including `.wpl` import), now-playing bar
+- **Game launcher** - scans Steam and other launchers and launches games from the UI or chat
+- **Connected devices** - a Tailscale-based panel for your other machines and phone
+- **Voice** - push-to-talk (Vosk) with spoken replies (Festival TTS); see Known gaps
+- **File analysis** - attach or drag in text, code or config files
+
+## Quick start
 
 ```bash
-# 1. Install Python dependencies (first time only)
+# 1. First time only: create .venv and install dependencies
 bash setup.sh install
 
-# 2. Launch everything
+# 2. Set your API key (see Security) - the backend refuses to start without it
+
+# 3. Launch everything (backend, Ollama, UI server, Electron app)
 bash launch.sh
 ```
 
-## Manual Start
+`launch.sh` starts, in order: the backend (`server.py`, port 8765), Ollama (port 11434),
+the UI server (port 8766), then the Electron app. The UI is also reachable in a browser at
+`http://localhost:8766/sentinel_ui_v3.html`, and from other devices on your network or
+tailnet at the same path.
+
+Models used (pull what you like):
 
 ```bash
-# Terminal 1 — Ollama
-OLLAMA_ORIGINS="*" /snap/ollama/current/bin/ollama serve
-
-# Terminal 2 — Backend
-bash setup.sh
-
-# Open in browser
-xdg-open sentinel.html
+ollama pull mistral      # main chat model
+ollama pull moondream    # image understanding
+ollama pull codellama    # code tasks
 ```
 
-## Features
+## Security
 
-- **Chat** — Streams responses from any local Ollama model
-- **Voice input** — Click the mic button, speak, auto-sends (Chrome/Edge)
-- **File analysis** — Attach or drag & drop any text/code/config file
-- **System metrics** — Live CPU, RAM, Disk, GPU, Uptime in the header bar
-- **Command execution** — Backend runs real Linux commands
-- **Quick commands** — Sidebar shortcuts for sysinfo, processes, network, etc.
-- **Modes** — Assistant / Sysadmin / Developer / Security personas
-- **Export** — Save the full conversation as a .txt file
+- All backend routes require an API key sent as the `X-Api-Key` header
+- The key is read from the `SENTINEL_API_KEY` environment variable or from
+  `~/.config/sentinel/.env`. The server will not start without it. There is no fallback
+- The UI keeps the key in the browser's `localStorage` (`sentinel_api_key`) and asks for it
+  on first use
+- Never commit a key. `.env` files are git-ignored
+- **Heads up:** the backend, UI server and Ollama listen on all interfaces, and the backend
+  has a shell-command route. The API key is the main protection, so use a strong one and
+  keep the machine on a trusted network. Binding to localhost and using `tailscale serve`
+  is a planned hardening step
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `server.py` | The live backend (FastAPI, port 8765) |
+| `sentinel_ui_v3.html` | The whole frontend, one file |
+| `media.py` | Music player backend |
+| `games.py` | Game library scanning and launching |
+| `modes/` | Context docs for each mode (`core.md` plus one per mode) |
+| `sentinal_electron/` | Electron wrapper (folder name typo is historical) |
+| `tools/` | `selfcheck.sh` (syntax and smoke test), `patch_once.py` (backed-up single edit) |
+| `backend/` | Older modular backend (`main.py`, `ollama_brain.py`, `security_shield.py`). Not launched by anything yet |
+| `launch.sh` / `setup.sh` | Start everything / install and run the backend |
+| `backups/` | Backup copies of files made before edits |
+| `OLD STUFF/` | Retired files |
 
 ## Backend API (port 8765)
 
-| Endpoint | Description |
+Route groups in `server.py` (all need the API key):
+
+| Group | Routes |
 |---|---|
-| GET /system/info | Full system info (CPU, RAM, GPU, etc.) |
-| GET /system/processes | Top processes by CPU |
-| GET /system/network | Network interfaces and IO |
-| GET /system/disks | Disk partitions and usage |
-| POST /exec | Run a shell command |
-| POST /file/read | Read a file by path |
-| GET /file/ls | List directory |
-| GET /env | Key environment variables |
+| System | `/system/info`, `/system/history`, `/system/processes`, `/system/network`, `/system/disks`, `/env` |
+| Shell and files | `/exec`, `/file/read`, `/file/write`, `/file/ls` |
+| Desktop | `/screenshot`, `/clipboard/*`, `/volume/*`, `/brightness/*`, `/wifi/*`, `/notifications` |
+| Memory and git | `/memory/*`, `/git/status` |
+| Speech | `/tts` |
+| Devices | `/devices`, `/devices/tailnet` |
+| Games | `/games`, `/games/rescan`, `/games/resolve`, `/games/art/{id}`, `/games/launch` |
+| Modes | `/modes`, `/modes/{mode}` |
+| Voice | `/api/voice/start`, `/api/voice/stop`, `/api/voice/last_response` |
+| Actions | `/api/action` |
 
-## Desktop Shortcut
+Media player routes live in `media.py`. Read `server.py` for the current, exact list.
 
-```bash
-cp SentinelV2.desktop ~/.local/share/applications/
-# Edit the Exec path if your home dir is different
-```
+## Known gaps
 
-## Models (pull whichever you want)
+- Voice (Vosk mic capture, replies queued for the UI to poll) is in `server.py`, but voice
+  replies use `backend/ollama_brain.py` and do not use the mode docs
+- The first-run API key prompt can fail inside Electron (no `window.prompt()`)
+- Some text-to-speech and microphone quirks remain from earlier versions
 
-```bash
-ollama pull mistral        # Best all-around, fits in 6GB VRAM
-ollama pull llama3.2       # Great for conversation
-ollama pull codellama      # Best for coding tasks
-ollama pull deepseek-r1    # Reasoning tasks
-```
+## Development notes
+
+- Read the real file before editing; do not assume structure
+- Back up a file into `backups/` before changing it, then run `bash tools/selfcheck.sh`
+- `server.py` changes need a backend restart; UI changes only need a page reload

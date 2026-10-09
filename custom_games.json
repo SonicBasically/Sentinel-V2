@@ -1,0 +1,14 @@
+[
+  {
+    "id": "minecraft",
+    "name": "Minecraft Launcher",
+    "command": ["minecraft-launcher"],
+    "aliases": ["minecraft", "mc", "minecraft java", "official minecraft launcher"]
+  },
+  {
+    "id": "curseforge",
+    "name": "CurseForge",
+    "command": ["curseforge"],
+    "aliases": ["curse forge", "curse", "minecraft mods", "modpacks", "mod launcher"]
+  }
+]

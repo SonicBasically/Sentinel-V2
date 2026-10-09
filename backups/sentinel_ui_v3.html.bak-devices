@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sentinel UI V3</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#080808" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Sentinel" />
+<meta name="mobile-web-app-capable" content="yes" />
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:#080808;--bg1:#0f0f0f;--bg2:#161616;--bg3:#1e1e1e;
+  --border:#1e1e1e;--border2:#2a2a2a;
+  --text:#e2e2e2;--text2:#666;--text3:#383838;
+  --accent:#c084fc;--accent2:#a855f7;
+  --green:#4ade80;--red:#f87171;--yellow:#fbbf24;--blue:#60a5fa;
+  --mono:'JetBrains Mono','Fira Code',monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans);}
+#shell{display:grid;grid-template-rows:auto auto 1fr;height:100vh;width:100vw;overflow:hidden;}
+#topbar{display:flex;align-items:center;gap:10px;padding:0 18px;height:50px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;}
+.logo{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:0.2em;color:var(--text);display:flex;align-items:center;gap:9px;white-space:nowrap;margin-right:auto;}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:all 0.4s;}
+.pulse.on{background:var(--green);box-shadow:0 0 8px #4ade8055;}
+.pulse.err{background:var(--red);}
+.tb-in{font-family:var(--mono);font-size:11px;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);padding:4px 9px;height:28px;outline:none;}
+#ollamaUrl{width:170px;}#modelSel{width:125px;cursor:pointer;}#backendUrl{width:150px;}
+.tb-sep{width:1px;height:18px;background:var(--border2);flex-shrink:0;}
+.tb-btn{font-family:var(--mono);font-size:11px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--text2);padding:0 11px;height:28px;cursor:pointer;white-space:nowrap;transition:all 0.15s;}
+.tb-btn:hover{color:var(--text);border-color:#3a3a3a;}
+.tb-btn.active{color:var(--accent);border-color:var(--accent2);}
+#sysbar{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;padding:7px 18px;background:var(--bg1);border-bottom:1px solid var(--border);flex-shrink:0;}
+.sc{background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:6px 9px;}
+.sc-l{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:3px;}
+.sc-v{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sc-b{height:2px;background:var(--border2);border-radius:1px;margin-top:4px;overflow:hidden;}
+.sc-f{height:100%;border-radius:1px;background:var(--text2);transition:width 0.5s,background 0.5s;}
+.sc-f.warn{background:var(--yellow);}.sc-f.crit{background:var(--red);}
+#main{display:grid;grid-template-columns:185px 1fr;overflow:hidden;min-height:0;}
+#sidebar{background:var(--bg1);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;}
+#sidebar-tabs{display:flex;border-bottom:1px solid var(--border);}
+.stab{flex:1;padding:8px 4px;font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text2);cursor:pointer;text-align:center;border:none;background:none;transition:all 0.15s;border-bottom:2px solid transparent;}
+.stab:hover{color:var(--text);}.stab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.sidebar-panel{display:none;flex-direction:column;flex:1;overflow-y:auto;overflow-x:hidden;}
+.sidebar-panel.show{display:flex;}
+.sidebar-panel::-webkit-scrollbar{width:3px;}
+.sidebar-panel::-webkit-scrollbar-thumb{background:var(--border2);}
+.sb-sec{padding:12px 12px 5px;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:0.12em;text-transform:uppercase;}
+.sb-btn{display:flex;align-items:center;gap:8px;padding:7px 12px;font-family:var(--mono);font-size:11px;color:var(--text2);cursor:pointer;background:none;border:none;width:100%;text-align:left;transition:all 0.1s;}
+.sb-btn:hover{background:var(--bg2);color:var(--text);}
+.sb-btn .ic{font-size:11px;width:13px;text-align:center;flex-shrink:0;}
+.sb-div{margin:5px 12px;border:none;border-top:1px solid var(--border);}
+.mode-btn{display:flex;align-items:center;gap:8px;padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--text2);cursor:pointer;background:none;border:none;width:100%;text-align:left;transition:all 0.1s;}
+.mode-btn:hover{background:var(--bg2);color:var(--text);}.mode-btn.active{color:var(--accent);}
+.mdot{width:5px;height:5px;border-radius:50%;background:var(--text3);flex-shrink:0;transition:all 0.2s;}
+.mode-btn.active .mdot{background:var(--accent);box-shadow:0 0 5px var(--accent);}
+.hist-item{padding:8px 12px;font-family:var(--mono);font-size:10px;color:var(--text2);cursor:pointer;border-bottom:1px solid var(--border);transition:all 0.1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.hist-item:hover{background:var(--bg2);color:var(--text);}
+.hist-item .hi-time{font-size:9px;color:var(--text3);margin-bottom:2px;}
+#dashboard{padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
+.dash-card{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;}
+.dash-title{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px;}
+.dash-graph{height:50px;position:relative;overflow:hidden;}
+.dash-graph canvas{width:100%;height:100%;}
+#chat{display:flex;flex-direction:column;overflow:hidden;min-height:0;background:var(--bg);position:relative;}
+#panel-overlay{display:none;position:absolute;inset:0;background:rgba(8,8,8,0.97);z-index:40;flex-direction:column;padding:20px;gap:12px;overflow-y:auto;}
+#panel-overlay.show{display:flex;}
+.panel-header{display:flex;align-items:center;justify-content:space-between;}
+.panel-title{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text);}
+.panel-close{font-family:var(--mono);font-size:11px;color:var(--text2);cursor:pointer;background:none;border:1px solid var(--border2);border-radius:5px;padding:3px 8px;}
+.panel-close:hover{color:var(--text);}
+#ss-preview{max-width:100%;border-radius:8px;border:1px solid var(--border2);}
+.theme-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.theme-card{border:1px solid var(--border2);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s;text-align:center;font-family:var(--mono);font-size:11px;}
+.theme-card:hover{border-color:#444;}.theme-card.active{border-color:var(--accent);}
+.theme-swatch{height:30px;border-radius:5px;margin-bottom:8px;}
+#msgs{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px;display:flex;flex-direction:column;gap:14px;}
+#msgs::-webkit-scrollbar{width:3px;}
+#msgs::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+.msg{display:flex;flex-direction:column;gap:4px;max-width:87%;}
+.msg.user{align-self:flex-end;align-items:flex-end;}
+.msg.ai{align-self:flex-start;align-items:flex-start;}
+.bubble{font-size:13px;line-height:1.7;padding:10px 14px;border-radius:12px;word-break:break-word;white-space:pre-wrap;}
+.msg.user .bubble{background:var(--bg3);border:1px solid var(--border2);border-bottom-right-radius:3px;}
+.msg.ai .bubble{background:var(--bg1);border:1px solid var(--border);border-bottom-left-radius:3px;}
+.bubble code{font-family:var(--mono);font-size:11.5px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;}
+.bubble pre{font-family:var(--mono);font-size:11.5px;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:11px 13px;margin:7px 0;overflow-x:auto;white-space:pre;line-height:1.5;}
+.bubble pre code{background:none;border:none;padding:0;}
+.msg-meta{font-family:var(--mono);font-size:9.5px;color:var(--text3);padding:0 2px;}
+.chat-screenshot{max-width:100%;border-radius:8px;border:1px solid var(--border2);margin-top:4px;cursor:pointer;}
+.typing{display:flex;gap:5px;align-items:center;padding:10px 14px;background:var(--bg1);border:1px solid var(--border);border-radius:12px;border-bottom-left-radius:3px;width:fit-content;}
+.typing span{width:5px;height:5px;border-radius:50%;background:var(--text3);animation:blink 1.3s infinite;}
+.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:0.2;transform:scale(1)}40%{opacity:1;transform:scale(1.2)}}
+.sys-block{font-family:var(--mono);font-size:11px;background:var(--bg1);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text2);max-width:540px;overflow-x:auto;}
+#drop-ov{display:none;position:absolute;inset:0;background:rgba(8,8,8,0.92);z-index:50;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-family:var(--mono);font-size:13px;color:var(--text2);border:1px dashed var(--border2);margin:14px;border-radius:12px;}
+#drop-ov.show{display:flex;}
+#confirm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:999;align-items:center;justify-content:center;}
+#confirm-modal.show{display:flex;}
+.confirm-box{background:#0f0f0f;border:1px solid #2a2a2a;border-radius:14px;padding:28px 30px;max-width:440px;width:90%;font-family:var(--mono);}
+.confirm-icon{font-size:24px;margin-bottom:10px;}
+.confirm-title{font-size:14px;color:var(--text);font-weight:600;margin-bottom:6px;}
+.confirm-detail{font-size:11px;color:#888;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:7px;padding:9px 11px;margin:10px 0;word-break:break-all;max-height:100px;overflow-y:auto;}
+.confirm-btns{display:flex;gap:10px;margin-top:18px;}
+.confirm-yes{flex:1;padding:9px;border-radius:7px;border:1px solid var(--green);background:transparent;color:var(--green);font-family:var(--mono);font-size:11px;cursor:pointer;letter-spacing:0.08em;}
+.confirm-no{flex:1;padding:9px;border-radius:7px;border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--mono);font-size:11px;cursor:pointer;}
+#save-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:999;align-items:center;justify-content:center;}
+#save-modal.show{display:flex;}
+#inputbar{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg1);padding:10px 18px 12px;display:flex;flex-direction:column;gap:7px;}
+#file-chip{display:none;align-items:center;gap:7px;padding:4px 9px;background:var(--bg2);border:1px solid var(--border2);border-radius:5px;font-family:var(--mono);font-size:10px;color:var(--text2);}
+#file-chip.show{display:flex;}
+#file-chip .fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);}
+#file-chip .rm{cursor:pointer;color:var(--text3);}#file-chip .rm:hover{color:var(--text);}
+#input-row{display:flex;gap:7px;align-items:flex-end;}
+#textarea{flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:9px 13px;font-size:13px;font-family:var(--sans);color:var(--text);resize:none;min-height:40px;max-height:120px;line-height:1.5;outline:none;transition:border-color 0.15s;}
+#textarea:focus{border-color:#2e2e2e;}
+#textarea::placeholder{color:var(--text3);}
+.ibt{width:40px;height:40px;border-radius:9px;border:1px solid var(--border2);background:var(--bg2);color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;transition:all 0.15s;}
+.ibt:hover{color:var(--text);border-color:#3a3a3a;}
+.ibt:disabled{opacity:0.3;cursor:not-allowed;}
+.ibt.send{background:var(--bg3);border-color:#2e2e2e;color:var(--text);}
+.ibt.send:hover{background:#222;}
+.ibt.rec{color:var(--red);border-color:var(--red);background:#140a0a;animation:rpulse 1s infinite;}
+.ibt.tts-on{color:var(--accent);border-color:var(--accent2);}
+@keyframes rpulse{0%,100%{opacity:1}50%{opacity:0.6}}
+#statusbar{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text3);}
+select option{background:#161616;}
+/* ── MOBILE RESPONSIVE ── */
+@media (max-width: 768px) {
+  #topbar {
+    padding: 0 10px;
+    height: 46px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .logo { font-size: 10px; letter-spacing: 0.12em; }
+  #ollamaUrl, #backendUrl { display: none; }
+  #modelSel { width: 100px; font-size: 10px; }
+  .tb-sep { display: none; }
+  .tb-btn { font-size: 10px; padding: 0 7px; height: 26px; }
+
+  #sysbar {
+    grid-template-columns: repeat(4, 1fr);
+    padding: 5px 10px;
+    gap: 4px;
+  }
+  #sysbar .sc:nth-child(5),
+  #sysbar .sc:nth-child(6) { display: none; }
+  .sc-v { font-size: 11px; }
+  .sc-l { font-size: 8px; }
+
+  #main { grid-template-columns: 1fr; }
+
+  #sidebar {
+    display: none;
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 220px;
+    z-index: 200;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.8);
+  }
+  #sidebar.mobile-open { display: flex; }
+
+  #sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 199;
+  }
+  #sidebar-overlay.show { display: block; }
+
+  #chat { width: 100%; }
+
+  #msgs { padding: 12px 10px; gap: 10px; }
+  .msg { max-width: 95%; }
+  .bubble { font-size: 13px; padding: 9px 12px; }
+
+  #inputbar { padding: 8px 10px 10px; gap: 5px; }
+  #input-row { gap: 5px; }
+  #textarea { font-size: 13px; padding: 8px 10px; }
+  .ibt { width: 38px; height: 38px; font-size: 15px; }
+
+  /* Mobile menu button */
+  #mobile-menu-btn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 28px;
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    background: var(--bg2);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+}
+
+@media (min-width: 769px) {
+  #mobile-menu-btn { display: none !important; }
+  #sidebar-overlay { display: none !important; }
+}
+
+/* Safe area for notches */
+@supports (padding: max(0px)) {
+  #inputbar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  #topbar   { padding-top: max(0px, env(safe-area-inset-top)); }
+}
+
+</style>
+</head>
+<body>
+<div id="shell">
+<div id="topbar">
+  <button id="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+  <div class="logo"><div class="pulse" id="pulse"></div>SENTINEL UI V3</div>
+  <input id="ollamaUrl" class="tb-in" type="text" value="http://localhost:11434" />
+  <select id="modelSel" class="tb-in">
+    <option value="mistral">mistral</option>
+    <option value="llama3.2">llama3.2</option>
+    <option value="llama3.1">llama3.1</option>
+    <option value="gemma3">gemma3</option>
+    <option value="deepseek-r1">deepseek-r1</option>
+    <option value="phi3">phi3</option>
+    <option value="codellama">codellama</option>
+    <option value="moondream">moondream</option>
+    <option value="llava">llava</option>
+  </select>
+  <div class="tb-sep"></div>
+  <input id="backendUrl" class="tb-in" type="text" value="http://localhost:8765" />
+  <div class="tb-sep"></div>
+  <button class="tb-btn" onclick="showThemes()">themes</button>
+  <button class="tb-btn" id="ttsToggleBtn" onclick="toggleTTS()">tts off</button>
+  <button class="tb-btn" onclick="clearChat()">clear</button>
+  <button class="tb-btn" onclick="exportChat()">export</button>
+</div>
+<div id="sysbar">
+  <div class="sc"><div class="sc-l">CPU</div><div class="sc-v" id="s-cpu">—</div><div class="sc-b"><div class="sc-f" id="s-cpu-b" style="width:0"></div></div></div>
+  <div class="sc"><div class="sc-l">RAM</div><div class="sc-v" id="s-mem">—</div><div class="sc-b"><div class="sc-f" id="s-mem-b" style="width:0"></div></div></div>
+  <div class="sc"><div class="sc-l">Disk</div><div class="sc-v" id="s-disk">—</div><div class="sc-b"><div class="sc-f" id="s-disk-b" style="width:0"></div></div></div>
+  <div class="sc"><div class="sc-l">GPU</div><div class="sc-v" id="s-gpu">—</div><div class="sc-b"><div class="sc-f" id="s-gpu-b" style="width:0"></div></div></div>
+  <div class="sc"><div class="sc-l">VRAM</div><div class="sc-v" id="s-vram">—</div><div class="sc-b"><div class="sc-f" id="s-vram-b" style="width:0"></div></div></div>
+  <div class="sc"><div class="sc-l">Uptime</div><div class="sc-v" id="s-uptime">—</div></div>
+  <div class="sc"><div class="sc-l">Ollama</div><div class="sc-v" id="s-ollama">—</div></div>
+</div>
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-tabs">
+      <button class="stab active" id="tab-cmds" onclick="showTab('cmds')">cmds</button>
+      <button class="stab" id="tab-history" onclick="showTab('history')">hist</button>
+      <button class="stab" id="tab-dash" onclick="showTab('dash')">dash</button>
+    </div>
+    <div class="sidebar-panel show" id="panel-cmds">
+      <div class="sb-sec">System</div>
+      <button class="sb-btn" onclick="qcmd('sysinfo')"><span class="ic">⬡</span>System info</button>
+      <button class="sb-btn" onclick="qcmd('processes')"><span class="ic">≡</span>Processes</button>
+      <button class="sb-btn" onclick="qcmd('network')"><span class="ic">◈</span>Network</button>
+      <button class="sb-btn" onclick="qcmd('disk')"><span class="ic">◎</span>Disk usage</button>
+      <button class="sb-btn" onclick="qcmd('memory')"><span class="ic">▦</span>Memory</button>
+      <button class="sb-btn" onclick="qcmd('gpu')"><span class="ic">▣</span>GPU status</button>
+      <button class="sb-btn" onclick="qcmd('screenshot')"><span class="ic">□</span>Screenshot</button>
+      <button class="sb-btn" onclick="qcmd('clipboard')"><span class="ic">◫</span>Clipboard</button>
+      <button class="sb-btn" onclick="qcmd('volume')"><span class="ic">♪</span>Volume</button>
+      <button class="sb-btn" onclick="qcmd('ports')"><span class="ic">◇</span>Open ports</button>
+      <button class="sb-btn" onclick="qcmd('services')"><span class="ic">▷</span>Services</button>
+      <button class="sb-btn" onclick="qcmd('logs')"><span class="ic">▤</span>Logs</button>
+      <button class="sb-btn" onclick="qcmd('git')"><span class="ic">⑂</span>Git status</button>
+      <button class="sb-btn" onclick="qcmd('memory_recall')"><span class="ic">◌</span>My memory</button>
+      <hr class="sb-div" />
+      <div class="sb-sec">Mode</div>
+      <button class="mode-btn active" id="m-assistant" onclick="setMode('assistant')"><span class="mdot"></span>Assistant</button>
+      <button class="mode-btn" id="m-sysadmin" onclick="setMode('sysadmin')"><span class="mdot"></span>Sysadmin</button>
+      <button class="mode-btn" id="m-developer" onclick="setMode('developer')"><span class="mdot"></span>Developer</button>
+      <button class="mode-btn" id="m-security" onclick="setMode('security')"><span class="mdot"></span>Security</button>
+    </div>
+    <div class="sidebar-panel" id="panel-history">
+      <div class="sb-sec">Past Sessions</div>
+      <div id="hist-list"></div>
+    </div>
+    <div class="sidebar-panel" id="panel-dash">
+      <div id="dashboard">
+        <div class="dash-card"><div class="dash-title">CPU %</div><div class="dash-graph"><canvas id="cpu-graph"></canvas></div></div>
+        <div class="dash-card"><div class="dash-title">RAM %</div><div class="dash-graph"><canvas id="mem-graph"></canvas></div></div>
+        <div class="dash-card"><div class="dash-title">GPU %</div><div class="dash-graph"><canvas id="gpu-graph"></canvas></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+  <div id="chat">
+    <div id="drop-ov"><div style="font-size:36px">↓</div>Drop file to attach</div>
+    <div id="panel-overlay">
+      <div class="panel-header">
+        <div class="panel-title" id="panel-title"></div>
+        <button class="panel-close" onclick="closePanel()">close</button>
+      </div>
+      <div id="panel-body"></div>
+    </div>
+    <div id="msgs"></div>
+    <div id="inputbar">
+      <div id="file-chip"><span>📎</span><span class="fname" id="chip-name"></span><span class="rm" onclick="clearFile()">✕</span></div>
+      <div id="input-row">
+        <button class="ibt" onclick="document.getElementById('fileIn').click()">📎</button>
+        <input type="file" id="fileIn" style="display:none" onchange="onFile(this)" />
+        <button class="ibt" id="micBtn" onclick="toggleMic()">🎙</button>
+        <button class="ibt" id="ttsBtn" onclick="toggleTTS()" title="Text to speech">🔊</button>
+        <textarea id="textarea" placeholder="Ask Sentinel anything..." rows="1"></textarea>
+        <button class="ibt send" id="sendBtn" onclick="send()">↑</button>
+      </div>
+      <div id="statusbar"><span id="st-l">ready</span><span id="st-r"></span></div>
+    </div>
+  </div>
+</div>
+</div>
+<div id="confirm-modal">
+  <div class="confirm-box">
+    <div class="confirm-icon" id="cm-icon"></div>
+    <div class="confirm-title" id="cm-title"></div>
+    <div class="confirm-detail" id="cm-detail"></div>
+    <div class="confirm-btns">
+      <button class="confirm-yes" id="cm-yes">CONFIRM</button>
+      <button class="confirm-no" id="cm-no">CANCEL</button>
+    </div>
+  </div>
+</div>
+<div id="save-modal">
+  <div class="confirm-box">
+    <div class="confirm-title">Save File</div>
+    <div style="font-size:10px;color:var(--text3);margin:10px 0 5px;">Full path (including filename)</div>
+    <input id="save-path" type="text" style="width:100%;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:7px;padding:9px 11px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none;margin-bottom:10px;" />
+    <div style="font-size:10px;color:var(--text3);margin-bottom:6px;">Quick locations</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;" id="save-quick"></div>
+    <div class="confirm-btns">
+      <button class="confirm-yes" id="save-yes">SAVE</button>
+      <button class="confirm-no" id="save-no">CANCEL</button>
+    </div>
+  </div>
+</div>
+<script>
+var msgsEl=document.getElementById('msgs');
+var textarea=document.getElementById('textarea');
+var sendBtn=document.getElementById('sendBtn');
+var stL=document.getElementById('st-l');
+var stR=document.getElementById('st-r');
+var pulse=document.getElementById('pulse');
+var micBtn=document.getElementById('micBtn');
+var ttsBtn=document.getElementById('ttsBtn');
+
+var chatHistory=[];
+var sessions=JSON.parse(localStorage.getItem('sentinel_sessions')||'[]');
+var currentMode='assistant';
+var attached=null;
+var recog=null;
+var recording=false;
+var voicePollInterval=null;
+var ttsEnabled=false;
+var graphData={cpu:[],mem:[],gpu:[]};
+var MAX_PTS=40;
+var availableModels=[];
+
+var MODEL_ROUTES={vision:'moondream',code:'codellama',default:'mistral'};
+
+// Auto-detect host — if accessed from another device, use that device's IP
+   var API_KEY = localStorage.getItem('sentinel_api_key') || '';
+   if(!API_KEY){
+     API_KEY = (prompt('Enter Sentinel API key:')||'').trim();
+     if(API_KEY) localStorage.setItem('sentinel_api_key', API_KEY);
+   }
+
+var _host = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+  ? window.location.hostname
+  : 'localhost';
+
+function ollama(){
+  var v = document.getElementById('ollamaUrl').value.trim().replace(/\/$/,'');
+  return v.replace('localhost', _host).replace('127.0.0.1', _host);
+}
+function backend(){
+  var v = document.getElementById('backendUrl').value.trim().replace(/\/$/,'');
+  return v.replace('localhost', _host).replace('127.0.0.1', _host);
+}
+
+// Authenticated fetch — always includes API key
+function bfetch(url, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Api-Key'] = API_KEY;
+  return fetch(url, opts);
+}
+function ts(){return new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+
+function pickModel(text,hasImage){
+  if(hasImage) return MODEL_ROUTES.vision;
+  var t=(text||'').toLowerCase();
+  var isCode=/\b(code|script|function|debug|python|javascript|bash|write a|fix this|class|def |const |import )\b/.test(t);
+  if(isCode&&availableModels.includes('codellama')) return 'codellama';
+  return MODEL_ROUTES.default;
+}
+
+function setActiveModel(name){
+  var sel=document.getElementById('modelSel');
+  var found=false;
+  for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===name){found=true;break;}}
+  if(!found){var o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);}
+  sel.value=name;
+  stR.textContent=name;
+}
+
+var THEMES={
+  'Default':{'--bg':'#080808','--bg1':'#0f0f0f','--bg2':'#161616','--bg3':'#1e1e1e','--accent':'#c084fc','--accent2':'#a855f7','--border':'#1e1e1e','--border2':'#2a2a2a'},
+  'Midnight':{'--bg':'#060a12','--bg1':'#0a1020','--bg2':'#111828','--bg3':'#1a2438','--accent':'#60a5fa','--accent2':'#3b82f6','--border':'#1a2030','--border2':'#243040'},
+  'Terminal':{'--bg':'#020804','--bg1':'#071008','--bg2':'#0e1a0e','--bg3':'#162416','--accent':'#4ade80','--accent2':'#22c55e','--border':'#122012','--border2':'#1e3020'},
+  'Ember':{'--bg':'#0a0604','--bg1':'#140a06','--bg2':'#1e1008','--bg3':'#2a1a0e','--accent':'#fb923c','--accent2':'#f97316','--border':'#201408','--border2':'#301e10'},
+  'Frost':{'--bg':'#06080a','--bg1':'#0a0e12','--bg2':'#10161e','--bg3':'#162028','--accent':'#67e8f9','--accent2':'#22d3ee','--border':'#10181e','--border2':'#1a2630'},
+  'Mono':{'--bg':'#080808','--bg1':'#101010','--bg2':'#181818','--bg3':'#222222','--accent':'#e2e2e2','--accent2':'#aaaaaa','--border':'#1e1e1e','--border2':'#2e2e2e'}
+};
+var activeTheme=localStorage.getItem('sentinel_theme')||'Default';
+
+function applyTheme(name){
+  var t=THEMES[name]||THEMES['Default'];
+  Object.entries(t).forEach(function(e){document.documentElement.style.setProperty(e[0],e[1]);});
+  activeTheme=name;
+  localStorage.setItem('sentinel_theme',name);
+}
+applyTheme(activeTheme);
+
+function showThemes(){
+  document.getElementById('panel-title').textContent='Themes';
+  var html='<div class="theme-grid">';
+  Object.entries(THEMES).forEach(function(e){
+    var name=e[0],t=e[1];
+    html+='<div class="theme-card'+(name===activeTheme?' active':'')+'" onclick="applyTheme(\''+name+'\');showThemes()">';
+    html+='<div class="theme-swatch" style="background:linear-gradient(135deg,'+t['--bg1']+','+t['--accent']+')"></div>';
+    html+=name+'</div>';
+  });
+  html+='</div>';
+  document.getElementById('panel-body').innerHTML=html;
+  document.getElementById('panel-overlay').classList.add('show');
+}
+function closePanel(){document.getElementById('panel-overlay').classList.remove('show');}
+
+function showTab(tab){
+  ['cmds','history','dash'].forEach(function(t){
+    document.getElementById('panel-'+t).classList.toggle('show',t===tab);
+    document.getElementById('tab-'+t).classList.toggle('active',t===tab);
+  });
+  if(tab==='history') renderHistory();
+  if(tab==='dash'){
+    // Redraw graphs now that canvas is visible and has dimensions
+    setTimeout(function(){
+      drawGraph('cpu-graph',graphData.cpu,'#c084fc');
+      drawGraph('mem-graph',graphData.mem,'#60a5fa');
+      drawGraph('gpu-graph',graphData.gpu,'#4ade80');
+    },50);
+  }
+}
+
+function saveSession(){
+  if(!chatHistory.length) return;
+  // Use first user message as preview, skip system messages
+  var firstUser=chatHistory.find(function(m){return m.role==='user';});
+  var preview=firstUser?String(firstUser.content).slice(0,60):'Session';
+  sessions.unshift({id:Date.now(),preview:preview,history:chatHistory.slice(),time:new Date().toISOString()});
+  sessions=sessions.slice(0,20);
+  localStorage.setItem('sentinel_sessions',JSON.stringify(sessions));
+  renderHistory();
+}
+
+function renderHistory(){
+  var el=document.getElementById('hist-list');
+  if(!sessions.length){el.innerHTML='<div style="padding:12px;font-family:var(--mono);font-size:10px;color:var(--text3)">No saved sessions</div>';return;}
+  var html='';
+  sessions.forEach(function(s,i){
+    html+='<div class="hist-item" onclick="loadSession('+i+')">';
+    html+='<div class="hi-time">'+new Date(s.time).toLocaleDateString()+' '+new Date(s.time).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})+'</div>';
+    html+=escHtml(s.preview)+'...</div>';
+  });
+  el.innerHTML=html;
+}
+
+function loadSession(i){
+  saveSession();
+  chatHistory=sessions[i].history.slice();
+  msgsEl.innerHTML='';
+  addMsg('ai','Session restored. Continuing from where you left off.');
+  showTab('cmds');
+}
+
+var ACTION_SCHEMA='You are a conversational AI assistant. Respond naturally to conversation.\n'+
+'CRITICAL: When the user says hello, hi, hey, thanks, or makes small talk — just respond conversationally with NO actions.\n'+
+'ONLY output <ACTION> blocks when the user EXPLICITLY asks you to do something on the system.\n'+
+'NEVER proactively create files, run commands, or open URLs unless directly asked.\n\n'+
+'When explicitly asked to DO something, output an <ACTION> block with JSON inside.\n'+
+'Format: <ACTION>{"type":"...","key":"value"}</ACTION>\n\n'+
+'Action types:\n'+
+'- run_command: {"type":"run_command","command":"bash cmd","description":"..."}\n'+
+'- open_url: {"type":"open_url","url":"https://...","description":"..."}\n'+
+'- reboot: {"type":"reboot","description":"..."}\n'+
+'- shutdown: {"type":"shutdown","description":"..."}\n'+
+'- suspend: {"type":"suspend","description":"..."}\n'+
+'- write_file: {"type":"write_file","path":"/home/thomasgomez/file.py","content":"...","description":"..."}\n'+
+'- open_file: {"type":"open_file","path":"...","description":"..."}\n'+
+'- kill_app: {"type":"kill_app","app":"name","description":"..."}\n'+
+'- close_window: {"type":"close_window","window":"title","description":"..."}\n'+
+'- set_volume: {"type":"set_volume","level":50,"description":"..."}\n'+
+'- mute: {"type":"mute","description":"..."}\n'+
+'- set_brightness: {"type":"set_brightness","level":80,"description":"..."}\n'+
+'- screenshot: {"type":"screenshot","description":"..."}\n'+
+'- clipboard_get: {"type":"clipboard_get","description":"..."}\n'+
+'- clipboard_set: {"type":"clipboard_set","text":"...","description":"..."}\n'+
+'- bluetooth_off: {"type":"bluetooth_off","description":"..."}\n'+
+'- bluetooth_on: {"type":"bluetooth_on","description":"..."}\n\n'+
+'RULES:\n'+
+'- GREETING RULE (HIGHEST PRIORITY): If the user says hi, hello, hey, thanks, how are you, or any greeting — respond with PLAIN TEXT ONLY. No <ACTION> blocks. No commands. No files. Just talk.\n'+
+'- FOR EVERYTHING ELSE: ALWAYS output an <ACTION> block when the user asks you to do something. NEVER just say you did it — actually output the <ACTION> JSON so the system can execute it.\n'+
+'- When writing scripts or files, ALWAYS use write_file AND show the code.\n'+
+'- Only reboot/shutdown/suspend need confirmation.\n'+
+'- Home dir: /home/thomasgomez\n'+
+'- NEVER repeat completed actions from history.';
+
+var MODES={
+  assistant:'You are Sentinel UI V3, a J.A.R.V.I.S.-style AI with full Linux system control. '+ACTION_SCHEMA,
+  sysadmin:'You are Sentinel UI V3 in Sysadmin Mode. Senior Linux sysadmin with full system control. '+ACTION_SCHEMA,
+  developer:'You are Sentinel UI V3 in Developer Mode. Expert software engineer with system access. '+ACTION_SCHEMA,
+  security:'You are Sentinel UI V3 in Security Mode. Cybersecurity expert. Legitimate tasks only. '+ACTION_SCHEMA
+};
+
+function setMode(m){
+  currentMode=m;
+  document.querySelectorAll('.mode-btn').forEach(function(b){b.classList.remove('active');});
+  document.getElementById('m-'+m).classList.add('active');
+  stL.textContent='mode: '+m;
+}
+
+function escHtml(t){return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function fmt(text){
+  var o=escHtml(text);
+  o=o.replace(/```(\w*)\n?([\s\S]*?)```/g,function(_,l,c){return '<pre><code>'+c.trim()+'</code></pre>';});
+  o=o.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  return o;
+}
+
+function autoScroll(){msgsEl.scrollTop=msgsEl.scrollHeight;}
+
+function addMsg(role,text,extra){
+  var d=document.createElement('div');
+  d.className='msg '+role;
+  var label=role==='user'?'YOU':'SENTINEL';
+  d.innerHTML='<div class="bubble">'+fmt(text)+'</div>'+(extra||'')+'<div class="msg-meta">'+label+' · '+ts()+'</div>';
+  msgsEl.appendChild(d);
+  autoScroll();
+  return d;
+}
+
+function showTyping(){
+  var d=document.createElement('div');
+  d.className='msg ai';d.id='_t';
+  d.innerHTML='<div class="typing"><span></span><span></span><span></span></div>';
+  msgsEl.appendChild(d);autoScroll();
+}
+function hideTyping(){var t=document.getElementById('_t');if(t)t.remove();}
+
+function toggleTTS(){
+  ttsEnabled=!ttsEnabled;
+  ttsBtn.classList.toggle('tts-on',ttsEnabled);
+  document.getElementById('ttsToggleBtn').textContent=ttsEnabled?'tts on':'tts off';
+  document.getElementById('ttsToggleBtn').classList.toggle('active',ttsEnabled);
+  stL.textContent='tts '+(ttsEnabled?'enabled':'disabled');
+}
+
+function speak(text){
+  if(!ttsEnabled||!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  var plain=text.replace(/<[^>]*>/g,'').replace(/```[\s\S]*?```/g,'[code block]').replace(/`[^`]*`/g,'').slice(0,500);
+  function doSpeak(){
+    var u=new SpeechSynthesisUtterance(plain);
+    u.rate=1.0;u.pitch=1.0;u.lang='en-US';
+    var voices=speechSynthesis.getVoices();
+    var pick=voices.find(function(v){return v.lang==='en-US'&&/google|neural|premium/i.test(v.name);})||
+           voices.find(function(v){return v.lang==='en-US';})||
+           voices.find(function(v){return v.lang&&v.lang.startsWith('en');})||
+           voices[0];
+    if(pick) u.voice=pick;
+    speechSynthesis.speak(u);
+  }
+  var voices=speechSynthesis.getVoices();
+  if(voices.length){ doSpeak(); } else { speechSynthesis.addEventListener('voiceschanged',function(){ doSpeak(); },{once:true}); }
+}
+
+function showConfirm(action){
+  return new Promise(function(resolve){
+    var icons={reboot:'↺',shutdown:'⏻',suspend:'◑'};
+    document.getElementById('cm-icon').textContent=icons[action.type]||'▷';
+    document.getElementById('cm-title').textContent=action.description||action.type;
+    document.getElementById('cm-detail').textContent=action.command||action.url||action.path||'';
+    document.getElementById('confirm-modal').classList.add('show');
+    document.getElementById('cm-yes').onclick=function(){document.getElementById('confirm-modal').classList.remove('show');resolve(true);};
+    document.getElementById('cm-no').onclick=function(){document.getElementById('confirm-modal').classList.remove('show');resolve(false);};
+  });
+}
+
+function showSaveDialog(defaultPath){
+  return new Promise(function(resolve){
+    var inp=document.getElementById('save-path');
+    inp.value=defaultPath||'/home/thomasgomez/';
+    var quick=document.getElementById('save-quick');
+    var locs=[['Home','~/'],['Desktop','~/Desktop/'],['Documents','~/Documents/'],['Downloads','~/Downloads/'],['Scripts','~/scripts/']];
+    quick.innerHTML=locs.map(function(l){
+      return '<button onclick="var f=document.getElementById(\'save-path\').value.split(\'/\').pop();document.getElementById(\'save-path\').value=\''+l[1]+'\'+f;" style="font-family:var(--mono);font-size:10px;padding:4px 9px;border:1px solid #2a2a2a;border-radius:5px;background:transparent;color:#888;cursor:pointer;">'+l[0]+'</button>';
+    }).join('');
+    document.getElementById('save-modal').classList.add('show');
+    document.getElementById('save-yes').onclick=function(){
+      document.getElementById('save-modal').classList.remove('show');
+      resolve(inp.value.trim().replace(/^~/,'/home/thomasgomez'));
+    };
+    document.getElementById('save-no').onclick=function(){
+      document.getElementById('save-modal').classList.remove('show');
+      resolve(null);
+    };
+    inp.addEventListener('keydown',function handler(e){
+      if(e.key==='Enter'){inp.removeEventListener('keydown',handler);document.getElementById('save-modal').classList.remove('show');resolve(inp.value.trim().replace(/^~/,'/home/thomasgomez'));}
+      if(e.key==='Escape'){inp.removeEventListener('keydown',handler);document.getElementById('save-modal').classList.remove('show');resolve(null);}
+    });
+    setTimeout(function(){inp.select();},50);
+  });
+}
+
+function parseActions(text){
+  var acts=[];
+  var re=/<ACTION>([\s\S]*?)<\/ACTION>/gi;
+  var m;
+  while((m=re.exec(text))!==null){
+    try{acts.push(JSON.parse(m[1].trim()));}catch(e){}
+  }
+  if(!acts.length){
+    var depth=0,start=-1;
+    for(var i=0;i<text.length;i++){
+      if(text[i]==='{'){if(depth===0)start=i;depth++;}
+      else if(text[i]==='}'){
+        depth--;
+        if(depth===0&&start!==-1){
+          try{var obj=JSON.parse(text.slice(start,i+1));if(obj.type)acts.push(obj);}catch(e){}
+          start=-1;
+        }
+      }
+    }
+  }
+  return acts;
+}
+
+function stripActions(text){
+  var out=text.replace(/<ACTION>[\s\S]*?<\/ACTION>/gi,'');
+  var depth=0,start=-1,removes=[];
+  for(var i=0;i<out.length;i++){
+    if(out[i]==='{'){if(depth===0)start=i;depth++;}
+    else if(out[i]==='}'){
+      depth--;
+      if(depth===0&&start!==-1){
+        try{var obj=JSON.parse(out.slice(start,i+1));if(obj.type)removes.push([start,i+1]);}catch(e){}
+        start=-1;
+      }
+    }
+  }
+  for(var j=removes.length-1;j>=0;j--){out=out.slice(0,removes[j][0])+out.slice(removes[j][1]);}
+  return out.replace(/\n{3,}/g,'\n\n').trim();
+}
+
+function addResult(label,content,ok){
+  var d=document.createElement('div');
+  d.className='msg ai';
+  var col=ok?'var(--green)':'var(--red)';
+  d.innerHTML='<div class="sys-block"><div style="font-size:9px;color:'+col+';letter-spacing:0.1em;margin-bottom:6px;">'+(ok?'✓':'✗')+' '+escHtml(label)+'</div><pre style="margin:0;color:#888;">'+escHtml(content||'(no output)')+'</pre></div><div class="msg-meta">SENTINEL · '+ts()+'</div>';
+  msgsEl.appendChild(d);autoScroll();
+}
+
+var DANGEROUS={reboot:1,shutdown:1,suspend:1};
+
+async function runAction(action){
+  var b=backend();
+  try{
+    switch(action.type){
+      case 'run_command':{
+        var r=await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:action.command,timeout:30})});
+        var d=await r.json();
+        var out=[d.stdout,d.stderr].filter(Boolean).join('\n').trim();
+        addResult(action.command,out,d.returncode===0);
+        return {ok:d.returncode===0,output:out};
+      }
+      case 'open_url':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'xdg-open "'+action.url+'"',timeout:5})});
+        addResult('Open '+action.url,'Browser launched.',true);
+        return {ok:true,output:'Opened '+action.url};
+      }
+      case 'reboot':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'systemctl reboot',timeout:5})});
+        addResult('Reboot','Rebooting...',true);
+        return {ok:true,output:'Rebooting.'};
+      }
+      case 'shutdown':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'systemctl poweroff',timeout:5})});
+        addResult('Shutdown','Shutting down...',true);
+        return {ok:true,output:'Shutting down.'};
+      }
+      case 'suspend':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'systemctl suspend',timeout:5})});
+        addResult('Suspend','Suspending...',true);
+        return {ok:true,output:'Suspending.'};
+      }
+      case 'write_file':{
+        var path=await showSaveDialog(action.path||'/home/thomasgomez/script.py');
+        if(!path){addResult('Write file','Cancelled.',false);return {ok:false,output:'Cancelled.'};}
+        try{
+          var wr=await bfetch(b+'/file/write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path,content:action.content||''})});
+          if(wr.ok){addResult('Saved → '+path,'File written.',true);return {ok:true,output:'Wrote '+path};}
+        }catch(fe){}
+        var wr2=await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:"cat > '"+path+"' << 'SENTINEL_EOF'\n"+(action.content||'')+"\nSENTINEL_EOF",timeout:10})});
+        var d2=await wr2.json();
+        addResult('Saved → '+path,d2.returncode===0?'File written.':d2.stderr,d2.returncode===0);
+        return {ok:d2.returncode===0,output:'Wrote '+path};
+      }
+      case 'open_file':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'xdg-open "'+action.path+'"',timeout:5})});
+        addResult('Open '+action.path,'Opened.',true);
+        return {ok:true,output:'Opened '+action.path};
+      }
+      case 'kill_app':{
+        await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'pkill -f "'+action.app+'" || pkill "'+action.app+'"',timeout:10})});
+        addResult('Kill: '+action.app,'Done.',true);
+        return {ok:true,output:'Killed '+action.app};
+      }
+      case 'close_window':{
+        var cmd=action.window?'xdotool search --name "'+action.window+'" | head -1 | xargs -I{} xdotool windowclose {}':'xdotool getactivewindow windowclose';
+        var r=await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd,timeout:10})});
+        var d=await r.json();
+        addResult('Close: '+(action.window||'active'),d.stdout||d.stderr||'Done.',d.returncode===0);
+        return {ok:d.returncode===0,output:d.stdout||d.stderr};
+      }
+      case 'set_volume':{
+        var r=await bfetch(b+'/volume/set?level='+action.level,{method:'POST'});
+        var d=await r.json();
+        addResult('Volume → '+action.level+'%',d.ok?'Done.':'Failed.',d.ok);
+        return {ok:d.ok,output:'Volume '+action.level+'%'};
+      }
+      case 'mute':{
+        await bfetch(b+'/volume/mute',{method:'POST'});
+        addResult('Mute toggle','Done.',true);
+        return {ok:true,output:'Muted.'};
+      }
+      case 'set_brightness':{
+        var r=await bfetch(b+'/brightness/set?level='+action.level,{method:'POST'});
+        var d=await r.json();
+        addResult('Brightness → '+action.level+'%',d.ok?'Done.':'Failed.',d.ok);
+        return {ok:d.ok,output:'Brightness '+action.level+'%'};
+      }
+      case 'screenshot':{
+        var r=await bfetch(b+'/screenshot');
+        var d=await r.json();
+        if(d.ok){
+          var div=document.createElement('div');div.className='msg ai';
+          div.innerHTML='<img class="chat-screenshot" src="data:image/png;base64,'+d.image_b64+'" onclick="viewScreenshot(\''+d.image_b64+'\')" /><div class="msg-meta">SENTINEL · '+ts()+'</div>';
+          msgsEl.appendChild(div);autoScroll();
+          return {ok:true,output:'Screenshot saved: '+d.path};
+        }else throw new Error('Screenshot failed');
+      }
+      case 'clipboard_get':{
+        var r=await bfetch(b+'/clipboard/get');
+        var d=await r.json();
+        addResult('Clipboard',d.content,true);
+        return {ok:true,output:d.content};
+      }
+      case 'clipboard_set':{
+        await bfetch(b+'/clipboard/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:action.text})});
+        addResult('Clipboard set','Copied.',true);
+        return {ok:true,output:'Clipboard set.'};
+      }
+      case 'bluetooth_off':{
+        var r=await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'rfkill block bluetooth && echo "Bluetooth disabled"',timeout:10})});
+        var d=await r.json();
+        addResult('Bluetooth off',d.stdout||d.stderr||'Done.',d.returncode===0);
+        return {ok:d.returncode===0,output:d.stdout||d.stderr};
+      }
+      case 'bluetooth_on':{
+        var r=await bfetch(b+'/exec',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:'rfkill unblock bluetooth && echo "Bluetooth enabled"',timeout:10})});
+        var d=await r.json();
+        addResult('Bluetooth on',d.stdout||d.stderr||'Done.',d.returncode===0);
+        return {ok:d.returncode===0,output:d.stdout||d.stderr};
+      }
+      default:
+        addResult(action.type,'Unknown action.',false);
+        return {ok:false,output:'Unknown.'};
+    }
+  }catch(e){
+    addResult(action.type,'Error: '+e.message,false);
+    return {ok:false,output:e.message};
+  }
+}
+
+function viewScreenshot(b64){
+  document.getElementById('panel-title').textContent='Screenshot';
+  document.getElementById('panel-body').innerHTML='<img id="ss-preview" src="data:image/png;base64,'+b64+'" />';
+  document.getElementById('panel-overlay').classList.add('show');
+}
+
+async function processActions(actions){
+  if(!actions.length) return null;
+  var results=[];
+  for(var i=0;i<actions.length;i++){
+    var action=actions[i];
+    var confirmed=true;
+    if(DANGEROUS[action.type]) confirmed=await showConfirm(action);
+    if(confirmed){
+      stL.textContent='running: '+(action.description||action.type)+'...';
+      var result=await runAction(action);
+      results.push({action:action,result:result});
+    }else{
+      addResult(action.description||action.type,'Cancelled.',false);
+      results.push({action:action,result:{ok:false,output:'Cancelled.'}});
+    }
+  }
+  return results;
+}
+
+async function extractActions(userMsg){
+  var trimmed=userMsg.trim();
+  var greetings=/^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon|how are you|what's up|howdy|thanks|thank you|ok|okay|sure|cool|nice|great)/i;
+  if(greetings.test(trimmed)||trimmed.split(' ').length<3) return [];
+  var keywords=/\b(open |close |kill |reboot|shut down|shutdown|suspend|sleep|navigate to |run |execute |install |update my|upgrade my|start |stop |disable |enable |set volume|set brightness|turn off|turn on|mute|unmute|take a screenshot|write a script|write a file|create a file|create a script|delete |remove |bluetooth)/i;
+  if(!keywords.test(trimmed)) return [];
+  stL.textContent='processing action...';
+  try{
+    var prompt='You are a Linux action extractor. Output ONLY one JSON object, no explanation.\n\nUser: "'+userMsg+'"\n\nChoose:\n{"type":"run_command","command":"bash cmd","description":"..."}\n{"type":"open_url","url":"https://...","description":"..."}\n{"type":"reboot","description":"..."}\n{"type":"shutdown","description":"..."}\n{"type":"suspend","description":"..."}\n{"type":"set_volume","level":50,"description":"..."}\n{"type":"mute","description":"..."}\n{"type":"set_brightness","level":80,"description":"..."}\n{"type":"screenshot","description":"..."}\n{"type":"bluetooth_off","description":"..."}\n{"type":"bluetooth_on","description":"..."}\n{"type":"kill_app","app":"name","description":"..."}\n{"type":"write_file","path":"/home/thomasgomez/file.py","content":"...","description":"..."}\n{"type":"none"}\n\nExamples:\n"turn off bluetooth" -> {"type":"bluetooth_off","description":"Disabling Bluetooth"}\n"open youtube" -> {"type":"open_url","url":"https://youtube.com","description":"Opening YouTube"}\n"set volume to 40" -> {"type":"set_volume","level":40,"description":"Setting volume to 40%"}\n"what time is it" -> {"type":"none"}\n\nJSON only:';
+    var res=await fetch(ollama()+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:document.getElementById('modelSel').value,messages:[{role:'user',content:prompt}],stream:false})});
+    var data=await res.json();
+    var raw=(data.message&&data.message.content?data.message.content:'').trim();
+    raw=raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+    var match=raw.match(/\{[\s\S]*\}/);
+    if(!match) return [];
+    var obj=JSON.parse(match[0]);
+    if(obj.type&&obj.type!=='none') return [obj];
+  }catch(e){console.log('extractActions failed:',e);}
+  return [];
+}
+
+async function send(){
+  var text=textarea.value.trim();
+  if(!text&&!attached) return;
+  sendBtn.disabled=true;
+  var hasImage=attached&&attached.isImage;
+  var chosenModel=pickModel(text,hasImage);
+  setActiveModel(chosenModel);
+  stL.textContent='thinking...';
+  var userDisplay=text;
+  var messages;
+  if(hasImage){
+    var base64=attached.content.split(',')[1];
+    userDisplay='[🖼 '+attached.name+']'+(text?'\n'+text:'');
+    addMsg('user',userDisplay);
+    var prevDiv=document.createElement('div');prevDiv.className='msg user';
+    prevDiv.innerHTML='<img src="'+attached.content+'" style="max-width:280px;border-radius:10px;border:1px solid var(--border2);" />';
+    msgsEl.appendChild(prevDiv);autoScroll();
+    chatHistory.push({role:'user',content:text||'Describe this image in detail.',images:[base64]});
+    messages=[{role:'system',content:'You are Sentinel UI V3. Analyze images thoroughly — describe what you see, colors, objects, text, and context.'}].concat(chatHistory);
+    clearFile();
+  }else{
+    var apiContent=text;
+    if(attached){
+      userDisplay='[📎 '+attached.name+']\n'+(text||'Analyze this file.');
+      apiContent='File: '+attached.name+'\n\nContent:\n'+attached.content+'\n\n'+(text||'Analyze this file.');
+      clearFile();
+    }
+    addMsg('user',userDisplay);
+    chatHistory.push({role:'user',content:apiContent});
+    var cleanHistory=chatHistory.filter(function(m){return !(m.role==='assistant'&&typeof m.content==='string'&&m.content.indexOf('[Results]')===0);});
+    messages=[{role:'system',content:MODES[currentMode]}].concat(cleanHistory);
+  }
+  textarea.value='';textarea.style.height='auto';
+  showTyping();
+  try{
+    var res=await fetch(ollama()+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:chosenModel,messages:messages,stream:true})});
+    if(!res.ok) throw new Error('Ollama '+res.status);
+    hideTyping();
+    var wrap=document.createElement('div');wrap.className='msg ai';
+    var bub=document.createElement('div');bub.className='bubble';
+    var meta=document.createElement('div');meta.className='msg-meta';meta.textContent='SENTINEL ['+chosenModel+'] · '+ts();
+    wrap.appendChild(bub);wrap.appendChild(meta);msgsEl.appendChild(wrap);
+    var full='';
+    try{
+      var reader=res.body.getReader(),dec=new TextDecoder();
+      while(true){
+        var chunk=await reader.read();
+        if(chunk.done) break;
+        var lines=dec.decode(chunk.value).split('\n');
+        for(var i=0;i<lines.length;i++){
+          if(!lines[i].trim()) continue;
+          try{var j=JSON.parse(lines[i]);if(j.message&&j.message.content){full+=j.message.content;bub.innerHTML=fmt(stripActions(full)||'…');autoScroll();}}catch(e){}
+        }
+      }
+    }catch(se){console.warn('stream error:',se);}
+    chatHistory.push({role:'assistant',content:full});
+    stL.textContent='ready · '+ts();
+    var visible=stripActions(full);
+    if(visible) speak(visible);
+    if(!hasImage){
+      var trimmedInput=(text||'').trim();
+      var isGreeting=/^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon|how are you|what's up|howdy|thanks|thank you|ok|okay|sure|cool|nice|great)[\s!.]*$/i.test(trimmedInput);
+      var actions=[];
+      if(!isGreeting){
+        actions=parseActions(full);
+        if(!actions.length) actions=await extractActions(text);
+      }
+      if(actions.length){
+        var results=await processActions(actions);
+        if(results){
+          var summary=results.map(function(r){return 'Action "'+( r.action.description||r.action.type)+'" → '+(r.result.ok?'success':'failed')+': '+r.result.output;}).join('\n');
+          chatHistory.push({role:'assistant',content:'[Results]\n'+summary});
+        }
+      }
+    }
+  }catch(e){
+    hideTyping();
+    addMsg('ai','⚠ '+e.message);
+    stL.textContent='error';
+  }
+  sendBtn.disabled=false;textarea.focus();
+}
+
+async function qcmd(cmd){
+  var b=backend();
+  var live={
+    sysinfo:function(){return bfetch(b+'/system/info').then(function(r){return r.json();}).then(function(d){return JSON.stringify(d,null,2);});},
+    processes:function(){return bfetch(b+'/system/processes?limit=12').then(function(r){return r.json();}).then(function(d){return d.processes.map(function(p){return 'PID '+String(p.pid).padEnd(6)+' CPU:'+String(p.cpu_percent+'%').padEnd(7)+' MEM:'+String(p.memory_percent+'%').padEnd(7)+' '+p.name;}).join('\n');});},
+    network_raw:function(){return bfetch(b+'/system/network').then(function(r){return r.json();}).then(function(d){return JSON.stringify(d,null,2);});},
+    disk:function(){return bfetch(b+'/system/disks').then(function(r){return r.json();}).then(function(d){return d.partitions.map(function(p){return p.mountpoint.padEnd(20)+' '+p.used_gb+'/'+p.total_gb+'GB ('+p.usage_pct+'%)';}).join('\n');});},
+    clipboard:function(){return bfetch(b+'/clipboard/get').then(function(r){return r.json();}).then(function(d){return d.content;});},
+    volume:function(){return bfetch(b+'/volume/get').then(function(r){return r.json();}).then(function(d){return d.output;});},
+    git:function(){return bfetch(b+'/git/status?path='+encodeURIComponent('/home/thomasgomez')).then(function(r){return r.json();}).then(function(d){return d.output||'No git repository found at home directory. Navigate to a repo first.';});},
+    memory_recall:function(){return bfetch(b+'/memory/get').then(function(r){return r.json();}).then(function(d){var m=d.memory;return Object.keys(m).length?JSON.stringify(m,null,2):'No memories stored yet. Ask Sentinel to remember something by saying "remember that..."';});}
+  };
+  var ask={
+    memory:'Check my current memory and swap usage right now and explain what it means.',
+    gpu:'Check my GPU status, temperature, VRAM and utilization right now and explain what it means.',
+    logs:'Show me the last 20 important system log entries using journalctl and explain anything concerning.',
+    services:'List all running and failed systemd services and explain what each important one does.',
+    ports:'List all open ports and which processes are using them. Explain what each port is used for and if anything looks suspicious.',
+    network:'Check my network interfaces, connections and bandwidth usage. Explain what you see in plain English.',
+    processes:'Show me the top 15 processes by CPU usage right now. Explain what each major process does and if anything looks unusual.'
+  };
+  if(cmd==='screenshot'){
+    try{
+      stL.textContent='taking screenshot...';
+      var d=await bfetch(b+'/screenshot').then(function(r){return r.json();});
+      if(d.ok){
+        addMsg('user','[quick: screenshot]');
+        var div=document.createElement('div');div.className='msg ai';
+        div.innerHTML='<img class="chat-screenshot" src="data:image/png;base64,'+d.image_b64+'" onclick="viewScreenshot(\''+d.image_b64+'\')" /><div class="msg-meta">SENTINEL · '+ts()+'</div>';
+        msgsEl.appendChild(div);autoScroll();
+      }
+      stL.textContent='ready';
+    }catch(e){addMsg('ai','Screenshot failed: '+e.message+'\n\nInstall scrot: sudo apt install scrot');}
+    return;
+  }
+  if(live[cmd]){
+    try{
+      stL.textContent='fetching '+cmd+'...';
+      var result=await live[cmd]();
+      addMsg('user','[quick: '+cmd+']');
+      var d=document.createElement('div');d.className='msg ai';
+      d.innerHTML='<div class="sys-block"><pre>'+escHtml(typeof result==='string'?result:JSON.stringify(result,null,2))+'</pre></div><div class="msg-meta">SENTINEL · '+ts()+'</div>';
+      msgsEl.appendChild(d);autoScroll();
+      stL.textContent='ready';
+    }catch(e){textarea.value=ask[cmd]||'Tell me about '+cmd+'.';send();}
+  }else if(ask[cmd]){textarea.value=ask[cmd];send();}
+}
+
+function clearChat(){
+  saveSession();
+  msgsEl.innerHTML='';chatHistory=[];
+  addMsg('ai','History cleared. How can I assist?');
+  stL.textContent='ready';stR.textContent='';
+}
+
+function exportChat(){
+  var lines=Array.from(msgsEl.querySelectorAll('.msg')).map(function(m){
+    var role=m.classList.contains('user')?'YOU':'SENTINEL';
+    var text=(m.querySelector('.bubble,.sys-block')||{innerText:''}).innerText;
+    var time=(m.querySelector('.msg-meta')||{innerText:''}).innerText;
+    return '['+time+']\n'+role+':\n'+text;
+  });
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([lines.join('\n\n---\n\n')],{type:'text/plain'}));
+  a.download='sentinel-'+Date.now()+'.txt';a.click();
+}
+
+function onFile(input){
+  var file=input.files&&input.files[0]?input.files[0]:input;
+  if(!file||!file.name) return;
+  var reader=new FileReader();
+  var isImage=file.type&&file.type.startsWith('image/')||/\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(file.name);
+  var isText=file.type&&file.type.startsWith('text')||/\.(py|js|ts|sh|md|txt|json|yaml|yml|toml|cfg|conf|log|csv|xml|html|css|rs|go|c|cpp|h|java)$/i.test(file.name);
+  reader.onload=function(e){
+    attached={name:file.name,content:e.target.result,isImage:isImage,mimeType:file.type||'image/png'};
+    document.getElementById('chip-name').textContent=file.name;
+    document.getElementById('file-chip').classList.add('show');
+  };
+  if(isImage||!isText) reader.readAsDataURL(file);
+  else reader.readAsText(file);
+  if(input.value!==undefined) input.value='';
+}
+
+function clearFile(){attached=null;document.getElementById('file-chip').classList.remove('show');}
+
+var chatEl=document.getElementById('chat'),dropEl=document.getElementById('drop-ov');
+chatEl.addEventListener('dragover',function(e){e.preventDefault();dropEl.classList.add('show');});
+chatEl.addEventListener('dragleave',function(e){if(!chatEl.contains(e.relatedTarget))dropEl.classList.remove('show');});
+chatEl.addEventListener('drop',function(e){e.preventDefault();dropEl.classList.remove('show');var f=e.dataTransfer.files[0];if(f)onFile(f);});
+
+textarea.addEventListener('input',function(){textarea.style.height='auto';textarea.style.height=Math.min(textarea.scrollHeight,120)+'px';});
+textarea.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+
+function startVoicePolling(){
+  if(voicePollInterval) return;
+  voicePollInterval=setInterval(async function(){
+    try{
+      var r=await bfetch(backend()+'/api/voice/last_response');
+      if(!r.ok) return;
+      var d=await r.json();
+      if(d.status==='new'){
+        addMsg('user',d.transcript);
+        addMsg('ai',d.reply);
+        speak(d.reply);
+      }
+    }catch(e){ /* silent — backend may just be busy */ }
+  },1000);
+}
+
+function stopVoicePolling(){
+  if(voicePollInterval){ clearInterval(voicePollInterval); voicePollInterval=null; }
+}
+
+async function toggleMic(){
+  if(recording){
+    recording=false;
+    micBtn.classList.remove('rec');
+    textarea.placeholder='Ask Sentinel anything...';
+    stL.textContent='stopping mic...';
+    stopVoicePolling();
+    try{
+      await bfetch(backend()+'/api/voice/stop',{method:'POST'});
+      stL.textContent='ready';
+    }catch(e){
+      stL.textContent='mic stop error: '+e.message;
+    }
+    return;
+  }
+
+  recording=true;
+  micBtn.classList.add('rec');
+  textarea.placeholder='Listening (server-side)...';
+  stL.textContent='🎙 mic engaged — speak now';
+  try{
+    var r=await bfetch(backend()+'/api/voice/start',{method:'POST'});
+    if(!r.ok){
+      recording=false;
+      micBtn.classList.remove('rec');
+      textarea.placeholder='Ask Sentinel anything...';
+      stL.textContent='mic start failed: HTTP '+r.status;
+      return;
+    }
+    startVoicePolling();
+  }catch(e){
+    recording=false;
+    micBtn.classList.remove('rec');
+    textarea.placeholder='Ask Sentinel anything...';
+    stL.textContent='mic start error: '+e.message;
+  }
+}
+
+function setBar(id,pct){var el=document.getElementById(id);if(!el)return;el.style.width=pct+'%';el.className='sc-f'+(pct>85?' crit':pct>70?' warn':'');}
+
+async function updateSys(){
+  try{
+    var r=await bfetch(backend()+'/system/info',{signal:AbortSignal.timeout(4000)});
+    if(!r.ok) return;
+    var d=await r.json();
+    document.getElementById('s-cpu').textContent=d.cpu.usage_pct+'%';setBar('s-cpu-b',d.cpu.usage_pct);
+    document.getElementById('s-mem').textContent=d.memory.used_gb+'/'+d.memory.total_gb+'G';setBar('s-mem-b',d.memory.usage_pct);
+    document.getElementById('s-disk').textContent=d.disk.usage_pct+'%';setBar('s-disk-b',d.disk.usage_pct);
+    document.getElementById('s-uptime').textContent=d.uptime;
+    if(d.gpus&&d.gpus.length){
+      var g=d.gpus[0];var vp=Math.round(g.memory_used_mb/g.memory_total_mb*100);
+      document.getElementById('s-gpu').textContent=g.utilization_pct+'%';setBar('s-gpu-b',g.utilization_pct);
+      document.getElementById('s-vram').textContent=Math.round(g.memory_used_mb/1024*10)/10+'/'+Math.round(g.memory_total_mb/1024)+'G';setBar('s-vram-b',vp);
+    }
+    graphData.cpu.push(d.cpu.usage_pct);if(graphData.cpu.length>MAX_PTS)graphData.cpu.shift();
+    graphData.mem.push(d.memory.usage_pct);if(graphData.mem.length>MAX_PTS)graphData.mem.shift();
+    if(d.gpus&&d.gpus.length){graphData.gpu.push(d.gpus[0].utilization_pct);if(graphData.gpu.length>MAX_PTS)graphData.gpu.shift();}
+    drawGraph('cpu-graph',graphData.cpu,'#c084fc');
+    drawGraph('mem-graph',graphData.mem,'#60a5fa');
+    drawGraph('gpu-graph',graphData.gpu,'#4ade80');
+  }catch(e){}
+}
+
+function drawGraph(id,data,color){
+  var canvas=document.getElementById(id);if(!canvas)return;
+  var dpr=window.devicePixelRatio||1;
+  canvas.width=canvas.offsetWidth*dpr;canvas.height=canvas.offsetHeight*dpr;
+  var ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
+  var w=canvas.offsetWidth,h=canvas.offsetHeight;
+  if(!data.length)return;
+  ctx.clearRect(0,0,w,h);
+  ctx.beginPath();
+  var step=w/(MAX_PTS-1);
+  data.forEach(function(v,i){var x=i*step,y=h-(v/100)*h;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+  ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();
+  ctx.lineTo(data.length*step,h);ctx.lineTo(0,h);ctx.closePath();
+  var grad=ctx.createLinearGradient(0,0,0,h);
+  grad.addColorStop(0,color+'44');grad.addColorStop(1,color+'00');
+  ctx.fillStyle=grad;ctx.fill();
+}
+
+async function checkOllama(){
+  try{
+    var r=await fetch(ollama()+'/api/tags',{signal:AbortSignal.timeout(3000)});
+    if(r.ok){
+      var d=await r.json();
+      var n=d.models?d.models.length:0;
+      document.getElementById('s-ollama').textContent=n+' model'+(n!==1?'s':'');
+      pulse.className='pulse on';
+      if(d.models&&d.models.length){
+        availableModels=d.models.map(function(m){return m.name.split(':')[0];});
+        var sel=document.getElementById('modelSel');
+        availableModels.forEach(function(name){
+          var found=false;
+          for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===name){found=true;break;}}
+          if(!found){var o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);}
+        });
+        if(availableModels.includes('mistral')) sel.value='mistral';
+        else sel.value=availableModels[0];
+        MODEL_ROUTES.default=sel.value;
+      }
+    }else throw 0;
+  }catch(e){document.getElementById('s-ollama').textContent='offline';pulse.className='pulse err';}
+}
+
+addMsg('ai','SENTINEL UI V3 online.\n\nVoice input · File & image analysis · Screenshots\nText-to-speech · 6 themes · Live graphs\nVolume · Brightness · Bluetooth · Full system control\nAuto model routing (moondream for images)\n\nJust tell me what to do.');
+
+async function init(){
+  for(var i=0;i<5;i++){
+    await checkOllama();
+    await updateSys();
+    if(document.getElementById('s-cpu').textContent!=='—') break;
+    await new Promise(function(r){setTimeout(r,2000);});
+  }
+}
+init();
+setInterval(updateSys,8000);
+setInterval(checkOllama,30000);
+if(window.speechSynthesis) window.speechSynthesis.getVoices();
+renderHistory();
+document.getElementById('backendUrl').addEventListener('change',updateSys);
+document.getElementById('ollamaUrl').addEventListener('change',checkOllama);
+
+// ── MOBILE SIDEBAR ──
+function toggleSidebar() {
+  var sb = document.getElementById('sidebar');
+  var ov = document.getElementById('sidebar-overlay');
+  sb.classList.toggle('mobile-open');
+  ov.classList.toggle('show');
+}
+
+// Close sidebar when a command is clicked on mobile
+document.querySelectorAll('.sb-btn, .mode-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    if (window.innerWidth <= 768) toggleSidebar();
+  });
+});
+
+// ── SERVICE WORKER ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(function(reg) {
+    console.log('Sentinel SW registered:', reg.scope);
+  }).catch(function(e) {
+    console.log('SW registration failed:', e);
+  });
+}
+
+</script>
+</body>
+</html>

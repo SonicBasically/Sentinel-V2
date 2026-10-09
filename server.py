@@ -3,10 +3,11 @@
 Sentinel UI V3.1 — Fully Hardened & Optimized Backend Server
 Incorporating Dynamic UID Audio, Smart App Aliasing, and Resilient Git Tracing.
 """
-import subprocess, shutil, os, platform, psutil, json, mimetypes, base64, time, re, math
+import subprocess, shutil, os, platform, psutil, json, mimetypes, base64, time, re, math, asyncio, sys
+from collections import deque
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -389,6 +390,36 @@ def get_devices():
     results['network'] = r3.stdout.strip()
     return results
 
+@app.get("/devices/tailnet", dependencies=[Depends(verify_key)])
+def get_tailnet_devices(request: Request):
+    """Every device on the Tailscale tailnet, online first.
+    'self' = the machine running this backend; 'you' = the device making this request."""
+    try:
+        r = subprocess.run(["tailscale", "status", "--json"],
+                           capture_output=True, text=True, timeout=5)
+        data = json.loads(r.stdout)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "devices": []}
+
+    client_ip = request.client.host if request.client else ""
+    is_loopback = client_ip in ("127.0.0.1", "::1", "localhost")
+
+    def row(n, is_self=False):
+        ips = n.get("TailscaleIPs") or [""]
+        return {
+            "name": n.get("HostName") or "",
+            "ip": ips[0],
+            "os": n.get("OS") or "",
+            "online": True if is_self else bool(n.get("Online")),
+            "last_seen": n.get("LastSeen") or "",
+            "self": is_self,
+            "you": (is_self and is_loopback) or (client_ip in ips),
+        }
+
+    devs = [row(data.get("Self", {}), True)] + [row(p) for p in (data.get("Peer") or {}).values()]
+    devs.sort(key=lambda d: (not d["online"], not d["self"], d["name"].lower()))
+    return {"ok": True, "devices": devs}
+
 @app.get("/notifications", dependencies=[Depends(verify_key)])
 def get_notifications():
     r2 = subprocess.run('dunstctl history 2>/dev/null | head -50', shell=True, capture_output=True, text=True, timeout=5)
@@ -422,6 +453,182 @@ def execute_desktop_action(req: ActionReq):
         return {"ok": True, "message": f"Dispatched instance startup tracking for execution alias: {executable}"}
         
     raise HTTPException(400, "Unrecognized action execution command mapping request.")
+
+# ── GAME LIBRARY ──
+# Library scanning/launching lives in games.py. Launch is by library ID only (never free-form commands).
+import games as game_lib
+
+class GameLaunchReq(BaseModel):
+    id: str
+
+@app.get("/games", dependencies=[Depends(verify_key)])
+def games_list():
+    return {"ok": True, "games": game_lib.get_library(), "updated": game_lib.last_scan()}
+
+@app.post("/games/rescan", dependencies=[Depends(verify_key)])
+def games_rescan():
+    game_lib.get_library()
+    game_lib.refresh(force=True)
+    return {"ok": True, "count": len(game_lib.get_library())}
+
+@app.get("/games/resolve", dependencies=[Depends(verify_key)])
+def games_resolve(q: str):
+    return {"ok": True, **game_lib.resolve(q)}
+
+@app.get("/games/art/{game_id}", dependencies=[Depends(verify_key)])
+def games_art(game_id: str):
+    found = game_lib.find_art(game_id)
+    if not found:
+        raise HTTPException(404, "No art for this game")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(found[0]), headers={"Cache-Control": "private, max-age=3600"})
+
+@app.post("/games/launch", dependencies=[Depends(verify_key)])
+def games_launch(req: GameLaunchReq):
+    res = game_lib.launch(req.id)
+    if not res.get("ok"):
+        raise HTTPException(404, res.get("error", "Launch failed"))
+    return res
+
+# ── MEDIA PLAYER ──
+# Library, streaming (short-lived tokens), now-playing via playerctl, and playlists live in media.py.
+import media as media_lib
+app.include_router(media_lib.make_router(verify_key))
+
+# ── MODE CONTEXT DOCS ──
+# modes/<mode>.md holds each mode's briefing. Text above "<!-- FULL -->" is the short
+# briefing; the whole file is the detailed version. modes/core.md is shared by all modes.
+# Files are re-read on every request, so edits apply without a restart.
+MODES_DIR = Path(__file__).resolve().parent / "modes"
+MODE_NAMES = ("assistant", "sysadmin", "developer", "security")
+FULL_MARK = "<!-- FULL -->"
+
+def _read_mode_doc(name: str):
+    """Return (brief, full) text for modes/<name>.md, or ("", "") if missing."""
+    p = MODES_DIR / f"{name}.md"
+    if not p.is_file():
+        return "", ""
+    txt = p.read_text(encoding="utf-8", errors="replace")
+    brief, _, rest = txt.partition(FULL_MARK)
+    brief, rest = brief.strip(), rest.strip()
+    return brief, (brief + "\n\n" + rest).strip() if rest else brief
+
+@app.get("/modes", dependencies=[Depends(verify_key)])
+def list_modes():
+    have = [n for n in ("core",) + MODE_NAMES if (MODES_DIR / f"{n}.md").is_file()]
+    return {"modes": list(MODE_NAMES), "docs_found": have, "dir": str(MODES_DIR)}
+
+@app.get("/modes/{mode}", dependencies=[Depends(verify_key)])
+def get_mode_doc(mode: str, detail: str = "brief"):
+    if mode not in MODE_NAMES:
+        raise HTTPException(404, "Unknown mode")
+    core_brief, _ = _read_mode_doc("core")
+    m_brief, m_full = _read_mode_doc(mode)
+    if not (core_brief or m_brief):
+        raise HTTPException(404, "No mode documents found in modes/")
+    detail = "full" if detail == "full" else "brief"
+    text = (core_brief + "\n\n" + (m_full if detail == "full" else m_brief)).strip()
+    return {"mode": mode, "detail": detail, "chars": len(text), "text": text}
+
+# ── VOICE STACK (ported from backend/main.py) ──
+# Push-to-talk flow: the UI calls /api/voice/start, Vosk transcribes the mic,
+# the Ollama brain answers, and the UI polls /api/voice/last_response.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
+
+voice_task = None
+mic_active = False
+vosk_model = None
+voice_replies = deque(maxlen=20)   # pending replies; one is handed out per poll
+_voice_bg = set()                  # keeps fire-and-forget tasks from being garbage collected
+
+def get_vosk_model():
+    global vosk_model
+    if vosk_model is None:
+        print("[Voice Stack] Loading Vosk model...")
+        import vosk
+        vosk.SetLogLevel(-1)
+        vosk_model = vosk.Model(lang="en-us")
+    return vosk_model
+
+async def handle_voice_intent(text: str):
+    print(f"[Voice Brain] Processing: '{text}'")
+    try:
+        from ollama_brain import process_chat_with_brain
+        result = await process_chat_with_brain(text)
+        reply = (result or {}).get("reply") or "I couldn't reach my local model."
+    except Exception as e:
+        print(f"[Voice Brain Error]: {e}")
+        reply = "Something went wrong while processing that."
+    clean = re.sub(r"<ACTION>[\s\S]*?</ACTION>", "", reply).strip()
+    voice_replies.append({"transcript": text, "reply": clean})
+    print(f"[Voice Brain] Reply: {clean[:80]}")
+
+async def continuous_mic_capture():
+    global mic_active
+    loop = asyncio.get_running_loop()
+    audio_q = asyncio.Queue()
+
+    def callback(indata, frames, t, status):
+        if status:
+            print(status, file=sys.stderr)
+        loop.call_soon_threadsafe(audio_q.put_nowait, bytes(indata))
+
+    try:
+        import sounddevice as sd
+        from vosk import KaldiRecognizer
+        model = await loop.run_in_executor(None, get_vosk_model)
+        samplerate = int(sd.query_devices(None, "input")["default_samplerate"])
+        recognizer = KaldiRecognizer(model, samplerate)
+        with sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype="int16",
+                               channels=1, callback=callback):
+            print("[Voice Stack] Microphone on.")
+            while mic_active:
+                try:
+                    data = await asyncio.wait_for(audio_q.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                if recognizer.AcceptWaveform(data):
+                    text = json.loads(recognizer.Result()).get("text", "").strip()
+                    if text:
+                        print(f"[Voice Captured]: {text}")
+                        t = asyncio.create_task(handle_voice_intent(text))
+                        _voice_bg.add(t)
+                        t.add_done_callback(_voice_bg.discard)
+    except Exception as e:
+        print(f"[Voice Stack Error]: {e}")
+    finally:
+        mic_active = False
+        print("[Voice Stack] Microphone off.")
+
+@app.post("/api/voice/start", dependencies=[Depends(verify_key)])
+async def start_voice_listening():
+    global voice_task, mic_active
+    if mic_active:
+        return {"status": "already_listening"}
+    mic_active = True
+    voice_task = asyncio.create_task(continuous_mic_capture())
+    return {"status": "listening_started"}
+
+@app.post("/api/voice/stop", dependencies=[Depends(verify_key)])
+async def stop_voice_listening():
+    global voice_task, mic_active
+    if not mic_active:
+        return {"status": "already_stopped"}
+    task, voice_task = voice_task, None
+    mic_active = False   # the capture loop notices within 0.5s and closes the stream
+    if task:
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except Exception:
+            pass
+    return {"status": "listening_stopped"}
+
+@app.get("/api/voice/last_response", dependencies=[Depends(verify_key)])
+async def get_last_voice_response():
+    if voice_replies:
+        r = voice_replies.popleft()
+        return {"status": "new", "transcript": r["transcript"], "reply": r["reply"], "listening": mic_active}
+    return {"status": "empty", "listening": mic_active}
 
 if __name__ == "__main__":
     import uvicorn

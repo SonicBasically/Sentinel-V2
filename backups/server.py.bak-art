@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+"""
+Sentinel UI V3.1 — Fully Hardened & Optimized Backend Server
+Incorporating Dynamic UID Audio, Smart App Aliasing, and Resilient Git Tracing.
+"""
+import subprocess, shutil, os, platform, psutil, json, mimetypes, base64, time, re, math, asyncio, sys
+from collections import deque
+from pathlib import Path
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+
+# ── SECURITY BOUNDS: HARDENING & CONFIG ──
+API_KEY = os.environ.get("SENTINEL_API_KEY")
+if not API_KEY:
+    _cfg = Path.home() / ".config" / "sentinel" / ".env"
+    if _cfg.exists():
+        for _line in _cfg.read_text().splitlines():
+            if _line.startswith("SENTINEL_API_KEY="):
+                API_KEY = _line.split("=", 1)[1].strip().strip('"')
+if not API_KEY:
+    raise RuntimeError("SENTINEL_API_KEY not set (env var or ~/.config/sentinel/.env)")
+
+def verify_key(x_api_key: str = Header(default="")):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+app = FastAPI(title="Sentinel UI V3 Backend", version="3.1.0")
+
+# Restricting origins to local app environments instead of wildcard *
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"],
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net):(8765|8766)$",
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
+
+BLOCKED = ["rm -rf /", "rm -rf /*", "mkfs", ":(){:|:&};:", "dd if=/dev/zero of=/dev/sd", "> /dev/sda"]
+
+def safe(cmd):
+    return not any(b in cmd.lower() for b in BLOCKED)
+
+# ── SMART APP REGISTRY ALIAS SYSTEM ──
+APP_ALIASES = {
+    "firefox": "firefox",
+    "browser": "firefox",
+    "web browser": "firefox",
+    "chrome": "google-chrome-stable",
+    "vs code": "code",
+    "visual studio code": "code",
+    "code": "code",
+    "discord": "discord",
+    "terminal": "gnome-terminal",
+    "files": "nautilus",
+    "calculator": "gnome-calculator"
+}
+
+class CmdReq(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout: Optional[int] = 15
+
+class FileReadReq(BaseModel):
+    path: str
+
+class FileWriteReq(BaseModel):
+    path: str
+    content: str
+
+class ClipboardReq(BaseModel):
+    text: str
+
+class MemoryReq(BaseModel):
+    key: str
+    value: str
+
+# ── MEMORY STORE ──
+MEMORY_FILE = Path.home() / ".sentinel_memory.json"
+def load_memory():
+    try: return json.loads(MEMORY_FILE.read_text())
+    except Exception as e:
+        print(f"[Warning] Memory load skipped: {e}")
+        return {}
+def save_memory(data):
+    try: MEMORY_FILE.write_text(json.dumps(data, indent=2))
+    except Exception as e: print(f"[Error] Memory writing failure: {e}")
+
+# ── ENVIRONMENT RESOLVER ──
+def _cpu_model():
+    try:
+        r = subprocess.run(["grep","-m1","model name","/proc/cpuinfo"], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0: return r.stdout.split(":")[1].strip()
+    except Exception as e: print(f"[Metrics System] /proc/cpuinfo unreadable: {e}")
+    return platform.processor() or "Intel i7-6700"
+
+def _distro():
+    try:
+        r = subprocess.run(["lsb_release","-ds"], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0: return r.stdout.strip().strip('"')
+    except: pass
+    try: return Path("/etc/os-release").read_text().split('PRETTY_NAME="')[1].split('"')[0]
+    except Exception as e: print(f"[Metrics System] Target OS fingerprint failed: {e}")
+    return platform.system()
+
+@app.get("/")
+def root(): return {"status": "online", "name": "Sentinel UI V3", "version": "3.1.0"}
+
+@app.get("/system/info", dependencies=[Depends(verify_key)])
+def system_info():
+    cpu_freq = psutil.cpu_freq()
+    mem  = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disk = psutil.disk_usage("/")
+    boot = datetime.fromtimestamp(psutil.boot_time())
+    uptime_s = (datetime.now() - boot).total_seconds()
+    uptime = f"{int(uptime_s//3600)}h {int((uptime_s%3600)//60)}m"
+    gpus = []
+    try:
+        r = subprocess.run(["nvidia-smi","--query-gpu=name,memory.total,memory.used,temperature.gpu,utilization.gpu","--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            for line in r.stdout.strip().split("\n"):
+                p = [x.strip() for x in line.split(",")]
+                if len(p) >= 5:
+                    gpus.append({"name":p[0],"memory_total_mb":int(p[1]),"memory_used_mb":int(p[2]),"temp_c":int(p[3]),"utilization_pct":int(p[4])})
+    except Exception as e: print(f"[Telemetry Warning] NVIDIA readings unreached: {e}")
+    
+    cpu_usage = psutil.cpu_percent(interval=0.3)
+    if math.isnan(cpu_usage) or math.isinf(cpu_usage): cpu_usage = 0.0
+        
+    return {
+        "hostname": platform.node(), "os": f"{platform.system()} {platform.release()}",
+        "distro": _distro(), "kernel": platform.version(), "arch": platform.machine(),
+        "cpu": {"model":_cpu_model(),"cores_physical":psutil.cpu_count(logical=False),"cores_logical":psutil.cpu_count(logical=True),"usage_pct":cpu_usage,"freq_mhz":round(cpu_freq.current) if cpu_freq else None},
+        "memory": {"total_gb":round(mem.total/1e9,1),"used_gb":round(mem.used/1e9,1),"available_gb":round(mem.available/1e9,1),"usage_pct":mem.percent},
+        "swap": {"total_gb":round(swap.total/1e9,1),"used_gb":round(swap.used/1e9,1),"usage_pct":swap.percent},
+        "disk": {"total_gb":round(disk.total/1e9,1),"used_gb":round(disk.used/1e9,1),"free_gb":round(disk.free/1e9,1),"usage_pct":disk.percent},
+        "gpus": gpus, "uptime": uptime, "boot_time": boot.strftime("%Y-%m-%d %H:%M:%S"),
+        "load_avg": list(os.getloadavg()), "timestamp": datetime.now().isoformat(),
+    }
+
+@app.get("/system/history", dependencies=[Depends(verify_key)])
+def system_history():
+    mem  = psutil.virtual_memory()
+    cpu  = psutil.cpu_percent(interval=0.1)
+    if math.isnan(cpu) or math.isinf(cpu): cpu = 0.0
+    return {"cpu": cpu, "mem": mem.percent, "timestamp": datetime.now().isoformat()}
+
+@app.get("/system/processes", dependencies=[Depends(verify_key)])
+def top_processes(limit: int = 15):
+    procs = []
+    for p in psutil.process_iter(["pid","name","cpu_percent","memory_percent","status","username"]):
+        try:
+            i = p.info
+            i["memory_percent"] = round(i["memory_percent"] or 0, 2)
+            i["cpu_percent"]    = round(i["cpu_percent"]    or 0, 2)
+            procs.append(i)
+        except: pass
+    procs.sort(key=lambda x: x["cpu_percent"], reverse=True)
+    return {"processes": procs[:limit]}
+
+@app.get("/system/network", dependencies=[Depends(verify_key)])
+def network_info():
+    try:
+        ifaces = {k:[{"family":str(a.family),"address":a.address,"netmask":a.netmask} for a in v] for k,v in psutil.net_if_addrs().items()}
+        stats  = {k:{"isup":s.isup,"speed_mb":s.speed,"mtu":s.mtu} for k,s in psutil.net_if_stats().items()}
+        io = psutil.net_io_counters()
+        return {"interfaces":ifaces,"stats":stats,"io":{"bytes_sent_mb":round(io.bytes_sent/1e6,2),"bytes_recv_mb":round(io.bytes_recv/1e6,2)}}
+    except Exception as e: return {"error": f"Failed checking network topology: {e}"}
+
+@app.get("/system/disks", dependencies=[Depends(verify_key)])
+def disk_info():
+    parts = []
+    for p in psutil.disk_partitions():
+        try:
+            u = psutil.disk_usage(p.mountpoint)
+            parts.append({"device":p.device,"mountpoint":p.mountpoint,"fstype":p.fstype,"total_gb":round(u.total/1e9,1),"used_gb":round(u.used/1e9,1),"free_gb":round(u.free/1e9,1),"usage_pct":u.percent})
+        except: pass
+    return {"partitions": parts}
+
+@app.post("/exec", dependencies=[Depends(verify_key)])
+def exec_cmd(req: CmdReq):
+    if not safe(req.command): raise HTTPException(403, "Command blocked by security policies.")
+    cwd = req.cwd or str(Path.home())
+    if not os.path.isdir(cwd): cwd = str(Path.home())
+    cmd = req.command
+    if cmd.strip().startswith('sudo '):
+        cmd = f"sudo -n {cmd.strip()[5:]}"
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=req.timeout, cwd=cwd)
+        if r.returncode != 0 and ('password' in r.stderr.lower() or 'askpass' in r.stderr.lower()):
+            cmd2 = req.command.replace('sudo ', 'pkexec ', 1)
+            r = subprocess.run(cmd2, shell=True, capture_output=True, text=True, timeout=req.timeout, cwd=cwd)
+        return {"stdout":r.stdout,"stderr":r.stderr,"returncode":r.returncode,"command":req.command,"cwd":cwd}
+    except subprocess.TimeoutExpired: raise HTTPException(408, f"Timeout after {req.timeout}s")
+    except Exception as e: raise HTTPException(500, str(e))
+
+@app.post("/file/read", dependencies=[Depends(verify_key)])
+def read_file(req: FileReadReq):
+    p = Path(req.path).expanduser().resolve()
+    if not p.exists(): raise HTTPException(404, f"Not found: {p}")
+    if not p.is_file(): raise HTTPException(400, "Not a file")
+    if p.stat().st_size > 10*1024*1024: raise HTTPException(413, "Too large")
+    mime, _ = mimetypes.guess_type(str(p))
+    is_text = (mime and mime.startswith("text")) or p.suffix in [".py",".js",".ts",".sh",".md",".txt",".json",".yaml",".yml",".toml",".cfg",".conf",".log",".csv",".xml",".html",".css",".rs",".go",".c",".cpp",".h",".java"]
+    if is_text:
+        return {"path":str(p),"content":p.read_text(errors="replace"),"type":"text","mime":mime}
+    return {"path":str(p),"content":base64.b64encode(p.read_bytes()).decode(),"type":"binary","mime":mime,"encoding":"base64"}
+
+@app.post("/file/write", dependencies=[Depends(verify_key)])
+def write_file(req: FileWriteReq):
+    try:
+        p = Path(req.path).expanduser().resolve()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(req.content)
+        return {"path": str(p), "ok": True}
+    except Exception as e: raise HTTPException(500, f"File system write failure: {e}")
+
+@app.get("/file/ls", dependencies=[Depends(verify_key)])
+def list_dir(path: str = "~", show_hidden: bool = False):
+    p = Path(path).expanduser().resolve()
+    if not p.exists(): raise HTTPException(404, "Not found")
+    if not p.is_dir(): raise HTTPException(400, "Not a directory")
+    entries = []
+    for item in sorted(p.iterdir()):
+        if not show_hidden and item.name.startswith("."): continue
+        try:
+            st = item.stat()
+            entries.append({"name":item.name,"type":"dir" if item.is_dir() else "file","size_bytes":st.st_size if item.is_file() else None,"modified":datetime.fromtimestamp(st.st_mtime).isoformat(),"permissions":oct(st.st_mode)[-3:]})
+        except: pass
+    return {"path":str(p),"entries":entries,"count":len(entries)}
+
+@app.get("/screenshot", dependencies=[Depends(verify_key)])
+def take_screenshot():
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out = str(Path.home() / f"sentinel_screenshot_{ts}.png")
+    cmds = [f"scrot '{out}'", f"gnome-screenshot -f '{out}'", f"import -window root '{out}'"]
+    for cmd in cmds:
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
+            if r.returncode == 0 and Path(out).exists():
+                img_b64 = base64.b64encode(Path(out).read_bytes()).decode()
+                return {"ok": True, "path": out, "image_b64": img_b64}
+        except: continue
+    raise HTTPException(500, "Screenshot failed. Please ensure scrot is available: sudo apt install scrot")
+
+@app.get("/clipboard/get", dependencies=[Depends(verify_key)])
+def get_clipboard():
+    for cmd in ["xclip -selection clipboard -o", "xsel --clipboard --output", "wl-paste"]:
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0: return {"content": r.stdout}
+        except: continue
+    raise HTTPException(500, "Clipboard read failed. Install xclip: sudo apt install xclip")
+
+@app.post("/clipboard/set", dependencies=[Depends(verify_key)])
+def set_clipboard(req: ClipboardReq):
+    for cmd in [f"echo -n '{req.text}' | xclip -selection clipboard", f"echo -n '{req.text}' | xsel --clipboard --input", f"echo -n '{req.text}' | wl-copy"]:
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
+            if r.returncode == 0: return {"ok": True}
+        except: continue
+    raise HTTPException(500, "Clipboard configuration failed.")
+
+@app.get("/volume/get", dependencies=[Depends(verify_key)])
+def get_volume():
+    r = subprocess.run("amixer sget Master 2>/dev/null || pactl get-sink-volume @DEFAULT_SINK@", shell=True, capture_output=True, text=True, timeout=5)
+    return {"output": r.stdout.strip()}
+
+@app.post("/volume/set", dependencies=[Depends(verify_key)])
+def set_volume(level: int):
+    level = max(0, min(100, level))
+    cmds = [f"pactl set-sink-volume @DEFAULT_SINK@ {level}%", f"amixer sset Master {level}%"]
+    for cmd in cmds:
+        r = subprocess.run(cmd, shell=True, capture_output=True, timeout=5)
+        if r.returncode == 0: return {"ok": True, "level": level}
+    raise HTTPException(500, "Hardware volume alteration failed.")
+
+@app.post("/volume/mute", dependencies=[Depends(verify_key)])
+def mute_volume():
+    subprocess.run("pactl set-sink-mute @DEFAULT_SINK@ toggle || amixer sset Master toggle", shell=True, timeout=5)
+    return {"ok": True}
+
+@app.get("/brightness/get", dependencies=[Depends(verify_key)])
+def get_brightness():
+    r = subprocess.run("brightnessctl get && brightnessctl max", shell=True, capture_output=True, text=True, timeout=5)
+    return {"output": r.stdout.strip()}
+
+@app.post("/brightness/set", dependencies=[Depends(verify_key)])
+def set_brightness(level: int):
+    level = max(0, min(100, level))
+    r = subprocess.run(f"brightnessctl set {level}%", shell=True, capture_output=True, timeout=5)
+    return {"ok": r.returncode == 0, "level": level}
+
+@app.get("/memory/get", dependencies=[Depends(verify_key)])
+def get_mem(key: Optional[str] = None):
+    data = load_memory()
+    if key: return {"key": key, "value": data.get(key)}
+    return {"memory": data}
+
+@app.post("/memory/set", dependencies=[Depends(verify_key)])
+def set_mem(req: MemoryReq):
+    data = load_memory()
+    data[req.key] = req.value
+    save_memory(data)
+    return {"ok": True, "key": req.key}
+
+@app.delete("/memory/clear", dependencies=[Depends(verify_key)])
+def clear_mem():
+    save_memory({})
+    return {"ok": True}
+
+@app.get("/wifi/status", dependencies=[Depends(verify_key)])
+def wifi_status():
+    r = subprocess.run("nmcli radio wifi", shell=True, capture_output=True, text=True, timeout=5)
+    return {"status": r.stdout.strip()}
+
+@app.post("/wifi/toggle", dependencies=[Depends(verify_key)])
+def wifi_toggle():
+    r = subprocess.run("nmcli radio wifi", shell=True, capture_output=True, text=True, timeout=5)
+    state = "off" if "enabled" in r.stdout else "on"
+    subprocess.run(f"nmcli radio wifi {state}", shell=True, timeout=5)
+    return {"ok": True, "new_state": state}
+
+# ── FIX: RESILIENT GIT LOOKUP CHAIN ──
+@app.get("/git/status", dependencies=[Depends(verify_key)])
+def git_status(path: str = "~"):
+    p = str(Path(path).expanduser().resolve())
+    # Verify directory holds an active git tree tracking context before running summaries
+    check = subprocess.run("git rev-parse --is-inside-work-tree", shell=True, capture_output=True, text=True, cwd=p, timeout=5)
+    if check.returncode != 0:
+        return {"output": "Target folder location is not tracked inside an active Git workspace repository configuration."}
+        
+    r = subprocess.run("git status && git log --oneline -5", shell=True, capture_output=True, text=True, cwd=p, timeout=10)
+    return {"output": r.stdout or r.stderr}
+
+@app.get("/env", dependencies=[Depends(verify_key)])
+def env_vars():
+    keys = ["HOME","USER","SHELL","PATH","LANG","TERM","DISPLAY","XDG_SESSION_TYPE","DESKTOP_SESSION","HOSTNAME"]
+    return {k: os.environ.get(k, "") for k in keys}
+
+# ── FIX: DYNAMIC USER UID PULSEAUDIO AUDIO PIPELINE ──
+class TTSReq(BaseModel):
+    text: str
+
+@app.post("/tts", dependencies=[Depends(verify_key)])
+def tts(req: TTSReq):
+    text = req.text
+    text = re.sub(r'<ACTION>[\s\S]*?</ACTION>', '', text)
+    text = re.sub(r'```[\s\S]*?```', 'code block', text)
+    text = re.sub(r'`[^`]*`', '', text)
+    text = re.sub(r'<[^>]*>', '', text)
+    text = text.strip()[:500]
+    if not text: return {"ok": False, "error": "Empty string string context post-cleaning processing."}
+    
+    try:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+            tmpfile = tmp.name
+        safe_text = text.replace('"', "'").replace('\\', '')
+        festival_script = f'(voice_cmu_us_slt_arctic_hts)(utt.save.wave (utt.synth (Utterance Text "{safe_text}")) "{tmpfile}")'
+        subprocess.run(['festival', '--pipe'], input=festival_script, text=True, capture_output=True, timeout=15)
+        
+        if os.path.exists(tmpfile) and os.path.getsize(tmpfile) > 0:
+            # Dynamically determine executing user's UID profile bounds instead of assuming 1000
+            user_uid = os.getuid()
+            env = {**os.environ}
+            env['XDG_RUNTIME_DIR'] = f'/run/user/{user_uid}'
+            env['PULSE_RUNTIME_PATH'] = f'/run/user/{user_uid}/pulse'
+            env['PULSE_SERVER'] = f'unix:/run/user/{user_uid}/pulse/native'
+            
+            subprocess.Popen(['paplay', tmpfile], env=env)
+            return {"ok": True}
+        return {"ok": False, "error": "Festival failed creating target file buffer."}
+    except Exception as e:
+        print(f"[Audio Link Engine Failure]: {e}")
+        return {"ok": False, "error": str(e)}
+
+@app.get("/devices", dependencies=[Depends(verify_key)])
+def get_devices():
+    results = {}
+    r = subprocess.run('bluetoothctl devices', shell=True, capture_output=True, text=True, timeout=5)
+    results['bluetooth'] = r.stdout.strip()
+    r2 = subprocess.run('lsusb', shell=True, capture_output=True, text=True, timeout=5)
+    results['usb'] = r2.stdout.strip()
+    r3 = subprocess.run('ip -br addr', shell=True, capture_output=True, text=True, timeout=5)
+    results['network'] = r3.stdout.strip()
+    return results
+
+@app.get("/devices/tailnet", dependencies=[Depends(verify_key)])
+def get_tailnet_devices(request: Request):
+    """Every device on the Tailscale tailnet, online first.
+    'self' = the machine running this backend; 'you' = the device making this request."""
+    try:
+        r = subprocess.run(["tailscale", "status", "--json"],
+                           capture_output=True, text=True, timeout=5)
+        data = json.loads(r.stdout)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "devices": []}
+
+    client_ip = request.client.host if request.client else ""
+    is_loopback = client_ip in ("127.0.0.1", "::1", "localhost")
+
+    def row(n, is_self=False):
+        ips = n.get("TailscaleIPs") or [""]
+        return {
+            "name": n.get("HostName") or "",
+            "ip": ips[0],
+            "os": n.get("OS") or "",
+            "online": True if is_self else bool(n.get("Online")),
+            "last_seen": n.get("LastSeen") or "",
+            "self": is_self,
+            "you": (is_self and is_loopback) or (client_ip in ips),
+        }
+
+    devs = [row(data.get("Self", {}), True)] + [row(p) for p in (data.get("Peer") or {}).values()]
+    devs.sort(key=lambda d: (not d["online"], not d["self"], d["name"].lower()))
+    return {"ok": True, "devices": devs}
+
+@app.get("/notifications", dependencies=[Depends(verify_key)])
+def get_notifications():
+    r2 = subprocess.run('dunstctl history 2>/dev/null | head -50', shell=True, capture_output=True, text=True, timeout=5)
+    return {"notifications": r2.stdout.strip() or "No notifications tracked. Install dunst for active indexing."}
+
+# ── NEW CONTROL LAYER WITH APPLICATION REGISTRY ROUTING ──
+class ActionReq(BaseModel):
+    action: str
+    target: Optional[str] = ""
+
+@app.post("/api/action", dependencies=[Depends(verify_key)])
+def execute_desktop_action(req: ActionReq):
+    act = req.action.lower()
+    tgt = req.target.strip().lower() if req.target else ""
+    
+    if act == "media_toggle":
+        subprocess.run(["playerctl", "play-pause"], capture_output=True)
+        return {"ok": True, "message": "Toggled runtime media framework target."}
+        
+    elif act == "open_app":
+        if not tgt: raise HTTPException(400, "Target process naming missing from parsing payload parameters.")
+        
+        # Translate natural language names down to exact terminal calls using our alias dict
+        executable = APP_ALIASES.get(tgt, tgt)
+        
+        # Confirm software package dependency is globally verified before launching
+        if not shutil.which(executable):
+            raise HTTPException(404, f"The app target terminal call '{executable}' was not found across this OS profile.")
+            
+        subprocess.Popen([executable], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
+        return {"ok": True, "message": f"Dispatched instance startup tracking for execution alias: {executable}"}
+        
+    raise HTTPException(400, "Unrecognized action execution command mapping request.")
+
+# ── GAME LIBRARY ──
+# Library scanning/launching lives in games.py. Launch is by library ID only (never free-form commands).
+import games as game_lib
+
+class GameLaunchReq(BaseModel):
+    id: str
+
+@app.get("/games", dependencies=[Depends(verify_key)])
+def games_list():
+    return {"ok": True, "games": game_lib.get_library(), "updated": game_lib.last_scan()}
+
+@app.post("/games/rescan", dependencies=[Depends(verify_key)])
+def games_rescan():
+    game_lib.get_library()
+    game_lib.refresh(force=True)
+    return {"ok": True, "count": len(game_lib.get_library())}
+
+@app.get("/games/resolve", dependencies=[Depends(verify_key)])
+def games_resolve(q: str):
+    return {"ok": True, **game_lib.resolve(q)}
+
+@app.post("/games/launch", dependencies=[Depends(verify_key)])
+def games_launch(req: GameLaunchReq):
+    res = game_lib.launch(req.id)
+    if not res.get("ok"):
+        raise HTTPException(404, res.get("error", "Launch failed"))
+    return res
+
+# ── MODE CONTEXT DOCS ──
+# modes/<mode>.md holds each mode's briefing. Text above "<!-- FULL -->" is the short
+# briefing; the whole file is the detailed version. modes/core.md is shared by all modes.
+# Files are re-read on every request, so edits apply without a restart.
+MODES_DIR = Path(__file__).resolve().parent / "modes"
+MODE_NAMES = ("assistant", "sysadmin", "developer", "security")
+FULL_MARK = "<!-- FULL -->"
+
+def _read_mode_doc(name: str):
+    """Return (brief, full) text for modes/<name>.md, or ("", "") if missing."""
+    p = MODES_DIR / f"{name}.md"
+    if not p.is_file():
+        return "", ""
+    txt = p.read_text(encoding="utf-8", errors="replace")
+    brief, _, rest = txt.partition(FULL_MARK)
+    brief, rest = brief.strip(), rest.strip()
+    return brief, (brief + "\n\n" + rest).strip() if rest else brief
+
+@app.get("/modes", dependencies=[Depends(verify_key)])
+def list_modes():
+    have = [n for n in ("core",) + MODE_NAMES if (MODES_DIR / f"{n}.md").is_file()]
+    return {"modes": list(MODE_NAMES), "docs_found": have, "dir": str(MODES_DIR)}
+
+@app.get("/modes/{mode}", dependencies=[Depends(verify_key)])
+def get_mode_doc(mode: str, detail: str = "brief"):
+    if mode not in MODE_NAMES:
+        raise HTTPException(404, "Unknown mode")
+    core_brief, _ = _read_mode_doc("core")
+    m_brief, m_full = _read_mode_doc(mode)
+    if not (core_brief or m_brief):
+        raise HTTPException(404, "No mode documents found in modes/")
+    detail = "full" if detail == "full" else "brief"
+    text = (core_brief + "\n\n" + (m_full if detail == "full" else m_brief)).strip()
+    return {"mode": mode, "detail": detail, "chars": len(text), "text": text}
+
+# ── VOICE STACK (ported from backend/main.py) ──
+# Push-to-talk flow: the UI calls /api/voice/start, Vosk transcribes the mic,
+# the Ollama brain answers, and the UI polls /api/voice/last_response.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
+
+voice_task = None
+mic_active = False
+vosk_model = None
+voice_replies = deque(maxlen=20)   # pending replies; one is handed out per poll
+_voice_bg = set()                  # keeps fire-and-forget tasks from being garbage collected
+
+def get_vosk_model():
+    global vosk_model
+    if vosk_model is None:
+        print("[Voice Stack] Loading Vosk model...")
+        import vosk
+        vosk.SetLogLevel(-1)
+        vosk_model = vosk.Model(lang="en-us")
+    return vosk_model
+
+async def handle_voice_intent(text: str):
+    print(f"[Voice Brain] Processing: '{text}'")
+    try:
+        from ollama_brain import process_chat_with_brain
+        result = await process_chat_with_brain(text)
+        reply = (result or {}).get("reply") or "I couldn't reach my local model."
+    except Exception as e:
+        print(f"[Voice Brain Error]: {e}")
+        reply = "Something went wrong while processing that."
+    clean = re.sub(r"<ACTION>[\s\S]*?</ACTION>", "", reply).strip()
+    voice_replies.append({"transcript": text, "reply": clean})
+    print(f"[Voice Brain] Reply: {clean[:80]}")
+
+async def continuous_mic_capture():
+    global mic_active
+    loop = asyncio.get_running_loop()
+    audio_q = asyncio.Queue()
+
+    def callback(indata, frames, t, status):
+        if status:
+            print(status, file=sys.stderr)
+        loop.call_soon_threadsafe(audio_q.put_nowait, bytes(indata))
+
+    try:
+        import sounddevice as sd
+        from vosk import KaldiRecognizer
+        model = await loop.run_in_executor(None, get_vosk_model)
+        samplerate = int(sd.query_devices(None, "input")["default_samplerate"])
+        recognizer = KaldiRecognizer(model, samplerate)
+        with sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype="int16",
+                               channels=1, callback=callback):
+            print("[Voice Stack] Microphone on.")
+            while mic_active:
+                try:
+                    data = await asyncio.wait_for(audio_q.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                if recognizer.AcceptWaveform(data):
+                    text = json.loads(recognizer.Result()).get("text", "").strip()
+                    if text:
+                        print(f"[Voice Captured]: {text}")
+                        t = asyncio.create_task(handle_voice_intent(text))
+                        _voice_bg.add(t)
+                        t.add_done_callback(_voice_bg.discard)
+    except Exception as e:
+        print(f"[Voice Stack Error]: {e}")
+    finally:
+        mic_active = False
+        print("[Voice Stack] Microphone off.")
+
+@app.post("/api/voice/start", dependencies=[Depends(verify_key)])
+async def start_voice_listening():
+    global voice_task, mic_active
+    if mic_active:
+        return {"status": "already_listening"}
+    mic_active = True
+    voice_task = asyncio.create_task(continuous_mic_capture())
+    return {"status": "listening_started"}
+
+@app.post("/api/voice/stop", dependencies=[Depends(verify_key)])
+async def stop_voice_listening():
+    global voice_task, mic_active
+    if not mic_active:
+        return {"status": "already_stopped"}
+    task, voice_task = voice_task, None
+    mic_active = False   # the capture loop notices within 0.5s and closes the stream
+    if task:
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except Exception:
+            pass
+    return {"status": "listening_stopped"}
+
+@app.get("/api/voice/last_response", dependencies=[Depends(verify_key)])
+async def get_last_voice_response():
+    if voice_replies:
+        r = voice_replies.popleft()
+        return {"status": "new", "transcript": r["transcript"], "reply": r["reply"], "listening": mic_active}
+    return {"status": "empty", "listening": mic_active}
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n  SENTINEL UI V3.1 — Backend Stack (HARDENED)")
+    print("  ────────────────────────────────────────────")
+    print("  http://localhost:8765")
+    uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")
