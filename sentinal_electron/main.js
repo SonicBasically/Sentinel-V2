@@ -20,12 +20,22 @@ let ollamaProc = null;
 
 // ── START UI SERVER ──
 function startUIServer() {
-  const { spawn } = require('child_process');
-  spawn('python3', ['-m', 'http.server', '8766', '--bind', '0.0.0.0'], {
-    cwd: PROJECT_DIR,
-    detached: false,
-  });
-  console.log('UI server started on 8766');
+  const { spawn, execFileSync } = require('child_process');
+  let tailscaleIP = '';
+  try {
+    tailscaleIP = execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8', timeout: 3000 }).trim().split(/\s+/)[0];
+    if (!/^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(tailscaleIP)) tailscaleIP = '';
+  } catch (err) {
+    console.warn('[Network] Tailscale IPv4 unavailable; UI will listen on localhost only.');
+  }
+  for (const address of ['127.0.0.1', ...(tailscaleIP ? [tailscaleIP] : [])]) {
+    const uiProc = spawn('python3', ['-m', 'http.server', '8766', '--bind', address], {
+      cwd: PROJECT_DIR,
+      detached: false,
+    });
+    uiProc.stderr.on('data', d => console.error('[ui]', d.toString().trim()));
+    console.log('UI server listening on ' + address + ':8766');
+  }
 }
 
 // ── START BACKEND (only if not already running) ──
@@ -70,6 +80,18 @@ function killExisting(cb) {
   setTimeout(cb, 500);
 }
 
+// ── PICK MONITOR ──
+// SENTINEL_MONITOR: right (default) | left | primary | 1,2,3... (left to right)
+function pickDisplay() {
+  const { screen } = require('electron');
+  const want = (process.env.SENTINEL_MONITOR || 'right').toLowerCase();
+  if (want === 'primary') return screen.getPrimaryDisplay();
+  const byX = [...screen.getAllDisplays()].sort((a, b) => a.bounds.x - b.bounds.x);
+  if (want === 'left') return byX[0];
+  if (/^\d+$/.test(want) && byX[Number(want) - 1]) return byX[Number(want) - 1];
+  return byX[byX.length - 1];
+}
+
 // ── CREATE WINDOW ──
 const ICON_PATH = path.join(__dirname, 'icon.png');
 
@@ -80,12 +102,15 @@ function createWindow() {
     const allowed = ['media', 'microphone', 'audioCapture', 'notifications', 'speech-recognition'];
     callback(allowed.includes(permission));
   });
+  const target = pickDisplay();
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    x: target.bounds.x,
+    y: target.bounds.y,
+    width: target.bounds.width,
+    height: target.bounds.height,
     minWidth: 900,
     minHeight: 600,
-    title: 'Sentinel UI V3',
+    title: 'Sentinel V2',
     icon: ICON_PATH,
     backgroundColor: '#080808',
     webPreferences: {
@@ -105,11 +130,11 @@ function createWindow() {
     const http = require('http');
     const req = http.get('http://localhost:8765/', res => {
       // Backend ready — load via http server
-      mainWindow.loadURL('http://localhost:8766/sentinel_ui_v3.html');
+      mainWindow.loadURL('http://localhost:8766/sentinel_v2.html');
     });
     req.on('error', () => {
       if (attempts < 20) setTimeout(tryLoad, 1000);
-      else mainWindow.loadURL('http://localhost:8766/sentinel_ui_v3.html');
+      else mainWindow.loadURL('http://localhost:8766/sentinel_v2.html');
     });
     req.end();
   }
@@ -117,7 +142,16 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    if (!process.env.SENTINEL_WINDOWED) mainWindow.setFullScreen(true);
     if (!process.env.SENTINEL_QUIET) mainWindow.webContents.openDevTools({ mode: 'detach' });
+  });
+
+  // F11 toggles fullscreen
+  mainWindow.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+      e.preventDefault();
+    }
   });
 
   mainWindow.on('close', e => {
@@ -134,7 +168,7 @@ function createTray() {
   tray = new Tray(icon);
 
   const menu = Menu.buildFromTemplate([
-    { label: 'Sentinel UI V3', enabled: false },
+    { label: 'Sentinel V2', enabled: false },
     { type: 'separator' },
     { label: 'Show', click: () => { if(mainWindow) mainWindow.show(); } },
     { label: 'Hide', click: () => { if(mainWindow) mainWindow.hide(); } },
@@ -156,14 +190,14 @@ function createTray() {
     }},
   ]);
 
-  tray.setToolTip('Sentinel UI V3');
+  tray.setToolTip('Sentinel V2');
   tray.setContextMenu(menu);
   tray.on('click', () => { if(mainWindow) mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show(); });
 }
 
 // ── APP LIFECYCLE ──
 app.whenReady().then(() => {
-  app.setName('Sentinel UI V3');
+  app.setName('Sentinel V2');
   // Set app icon for Linux taskbar
   try { app.setIcon(nativeImage.createFromPath(ICON_PATH)); } catch(e) {}
   killExisting(() => {

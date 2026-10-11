@@ -18,7 +18,7 @@ done
 echo "== UI JavaScript syntax =="
 if python3 - <<'PY'
 import re, sys
-s = open('sentinel_ui_v3.html', encoding='utf-8').read()
+s = open('sentinel_v2.html', encoding='utf-8').read()
 blocks = re.findall(r'<script[^>]*>(.*?)</script>', s, re.S)
 if not blocks:
     print('no <script> block found'); sys.exit(1)
@@ -26,9 +26,9 @@ open('/tmp/selfcheck_ui.js', 'w', encoding='utf-8').write(max(blocks, key=len))
 PY
 then
   if node --check /tmp/selfcheck_ui.js 2>/tmp/selfcheck.err; then
-    echo "ok    sentinel_ui_v3.html"
+    echo "ok    sentinel_v2.html"
   else
-    echo "FAIL  sentinel_ui_v3.html"; head -n 6 /tmp/selfcheck.err; fail=1
+    echo "FAIL  sentinel_v2.html"; head -n 6 /tmp/selfcheck.err; fail=1
   fi
 else
   echo "FAIL  could not extract UI script"; fail=1

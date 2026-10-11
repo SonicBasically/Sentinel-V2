@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Sentinel UI V3
+Comment=Jarvis-style AI Assistant powered by Ollama
+Exec=/home/thomasgomez/.local/bin/sentinel-launch.sh
+Icon=/home/thomasgomez/Desktop/OG_Drive/GitHub/Sentinel-V2/sentinal_electron/icon.png
+Terminal=false
+Categories=Utility;AI;
+StartupNotify=true
+StartupWMClass=electron

@@ -8,7 +8,7 @@ VENV="$SCRIPT_DIR/.venv"
 
 install() {
   echo ""
-  echo "  SENTINEL UI V3 — Setup"
+  echo "  SENTINEL V2 — Setup"
   echo "  ─────────────────────────────"
   echo "  Installing system dependencies..."
   sudo apt-get install -y xdotool 2>/dev/null || true

@@ -1,6 +1,6 @@
-// Sentinel UI V3 — Service Worker
-const CACHE = 'sentinel-v3';
-const ASSETS = ['./sentinel_ui_v3.html', './manifest.json'];
+// Sentinel V2 — Service Worker
+const CACHE = 'sentinel-v2';
+const ASSETS = ['./sentinel_v2.html', './manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));

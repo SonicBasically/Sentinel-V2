@@ -1,0 +1,32 @@
+{
+  "name": "sentinel-ui-v3",
+  "version": "3.0.0",
+  "description": "Sentinel UI V3 - Jarvis-style AI Assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.thomasgomez.sentinel",
+    "productName": "Sentinel UI V3",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "icon.png",
+      "category": "Utility"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "sentinel_ui_v3.html",
+      "icon.png"
+    ]
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  }
+}

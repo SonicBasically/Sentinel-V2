@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Sentinel UI V3
+Name=Sentinel V2
 Comment=AI Assistant powered by Ollama
 Exec=bash /home/thomasgomez/Desktop/OG_Drive/Sentinal V2/sentinel_electron/setup_electron.sh run
 Icon=utilities-terminal

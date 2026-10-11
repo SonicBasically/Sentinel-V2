@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Sentinel UI V3.1 — Fully Hardened & Optimized Backend Server
+Sentinel V2 — Fully Hardened & Optimized Backend Server
 Incorporating Dynamic UID Audio, Smart App Aliasing, and Resilient Git Tracing.
 """
 import subprocess, shutil, os, platform, psutil, json, mimetypes, base64, time, re, math, asyncio, sys
+from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from pathlib import Path
 from datetime import datetime
@@ -27,13 +28,14 @@ def verify_key(x_api_key: str = Header(default="")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-app = FastAPI(title="Sentinel UI V3 Backend", version="3.1.0")
+app = FastAPI(title="Sentinel V2 Backend", version="3.1.0",
+              docs_url=None, redoc_url=None, openapi_url=None)  # hide the route list from the LAN
 
 # Restricting origins to local app environments instead of wildcard *
 app.add_middleware(
     CORSMiddleware, 
     allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net):(8765|8766)$",
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net):(8765|8766)$",
     allow_credentials=True, 
     allow_methods=["*"], 
     allow_headers=["*"]
@@ -107,7 +109,7 @@ def _distro():
     return platform.system()
 
 @app.get("/")
-def root(): return {"status": "online", "name": "Sentinel UI V3", "version": "3.1.0"}
+def root(): return {"status": "online", "name": "Sentinel V2", "version": "3.1.0"}
 
 @app.get("/system/info", dependencies=[Depends(verify_key)])
 def system_info():
@@ -346,8 +348,11 @@ def env_vars():
 class TTSReq(BaseModel):
     text: str
 
+_tts_proc = None   # the paplay process of the last spoken reply, so a new one can cut it off
+
 @app.post("/tts", dependencies=[Depends(verify_key)])
 def tts(req: TTSReq):
+    global _tts_proc
     text = req.text
     text = re.sub(r'<ACTION>[\s\S]*?</ACTION>', '', text)
     text = re.sub(r'```[\s\S]*?```', 'code block', text)
@@ -372,7 +377,9 @@ def tts(req: TTSReq):
             env['PULSE_RUNTIME_PATH'] = f'/run/user/{user_uid}/pulse'
             env['PULSE_SERVER'] = f'unix:/run/user/{user_uid}/pulse/native'
             
-            subprocess.Popen(['paplay', tmpfile], env=env)
+            if _tts_proc and _tts_proc.poll() is None:
+                _tts_proc.terminate()
+            _tts_proc = subprocess.Popen(['paplay', tmpfile], env=env)
             return {"ok": True}
         return {"ok": False, "error": "Festival failed creating target file buffer."}
     except Exception as e:
@@ -495,6 +502,20 @@ def games_launch(req: GameLaunchReq):
 import media as media_lib
 app.include_router(media_lib.make_router(verify_key))
 
+# ── DIRECT COMMANDS (voice and chat) ──
+# Open a game or app, music controls (playerctl) and volume, run without the language model.
+import voice_commands
+
+class CommandReq(BaseModel):
+    text: str
+
+@app.post("/command", dependencies=[Depends(verify_key)])
+async def run_command(req: CommandReq):
+    res = await asyncio.to_thread(voice_commands.try_command, req.text, APP_ALIASES)
+    if not res:
+        return {"handled": False}
+    return res
+
 # ── MODE CONTEXT DOCS ──
 # modes/<mode>.md holds each mode's briefing. Text above "<!-- FULL -->" is the short
 # briefing; the whole file is the detailed version. modes/core.md is shared by all modes.
@@ -535,8 +556,11 @@ def get_mode_doc(mode: str, detail: str = "brief"):
 # the Ollama brain answers, and the UI polls /api/voice/last_response.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "backend"))
 
+import wake as wake_lib
+
 voice_task = None
-mic_active = False
+mic_active = False                 # True while wake listening is on (the mic stream is open)
+wake_state = "idle"                # loading | idle (waiting for "Hey Sentinel") | awake (waiting for a command) | busy (running one)
 vosk_model = None
 voice_replies = deque(maxlen=20)   # pending replies; one is handed out per poll
 _voice_bg = set()                  # keeps fire-and-forget tasks from being garbage collected
@@ -547,62 +571,154 @@ def get_vosk_model():
         print("[Voice Stack] Loading Vosk model...")
         import vosk
         vosk.SetLogLevel(-1)
-        vosk_model = vosk.Model(lang="en-us")
+        model_path = Path(os.environ.get(
+            "SENTINEL_VOSK_MODEL",
+            str(Path.home() / "Desktop" / "OG_Drive" / "Models" / "vosk" / "vosk-model-en-us-0.22-lgraph")
+        )).expanduser()
+        if model_path.is_dir():
+            print(f"[Voice Stack] Using Vosk model at {model_path}")
+            vosk_model = vosk.Model(str(model_path))
+        else:
+            print(f"[Voice Stack] Model path missing ({model_path}); using Vosk's default en-us model.")
+            vosk_model = vosk.Model(lang="en-us")
     return vosk_model
+
+voice_conversation_history = []
 
 async def handle_voice_intent(text: str):
     print(f"[Voice Brain] Processing: '{text}'")
     try:
+        cmd = await asyncio.to_thread(voice_commands.try_command, text, APP_ALIASES)
+    except Exception as e:
+        print(f"[Voice Command Error]: {e}")
+        cmd = {"reply": "Something went wrong running that command."}
+    if cmd:
+        voice_replies.append({"transcript": text, "reply": cmd["reply"]})
+        print(f"[Voice Command] {cmd['reply'][:80]}")
+        return
+    try:
         from ollama_brain import process_chat_with_brain
-        result = await process_chat_with_brain(text)
+        result = await process_chat_with_brain(text, use_tools=False, history=voice_conversation_history)
         reply = (result or {}).get("reply") or "I couldn't reach my local model."
     except Exception as e:
         print(f"[Voice Brain Error]: {e}")
         reply = "Something went wrong while processing that."
-    clean = re.sub(r"<ACTION>[\s\S]*?</ACTION>", "", reply).strip()
+    clean = re.sub(r"<ACTION\b[^>]*>[\s\S]*?</ACTION\s*>", "", reply, flags=re.IGNORECASE)
+    clean = re.sub(r"</?ACTION\b[^>]*>", "", clean, flags=re.IGNORECASE).strip()
     voice_replies.append({"transcript": text, "reply": clean})
     print(f"[Voice Brain] Reply: {clean[:80]}")
 
+def _spawn(coro):
+    t = asyncio.create_task(coro)
+    _voice_bg.add(t)
+    t.add_done_callback(_voice_bg.discard)
+    return t
+
+async def _run_wake_command(text: str):
+    global wake_state
+    try:
+        await handle_voice_intent(text)
+    finally:
+        if wake_state == "busy":
+            wake_state = "idle"   # command finished: back to waiting for "Hey Sentinel"
+
 async def continuous_mic_capture():
-    global mic_active
+    # Wake-phrase loop. The mic stays open while wake listening is on, but nothing is acted on until
+    # "Hey Sentinel" is heard:  idle -> (phrase) -> awake -> (command) -> busy -> (done) -> idle.
+    # awake also falls back to idle after wake_lib.WAKE_TIMEOUT seconds without speech.
+    global mic_active, wake_state
     loop = asyncio.get_running_loop()
     audio_q = asyncio.Queue()
+    vosk_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sentinel-vosk")
+    max_audio_chunks = 8
+    falling_behind_warned = False
+    wake_deadline = 0.0
 
     def callback(indata, frames, t, status):
         if status:
             print(status, file=sys.stderr)
-        loop.call_soon_threadsafe(audio_q.put_nowait, bytes(indata))
+        chunk = bytes(indata)
+        def enqueue_chunk():
+            nonlocal falling_behind_warned
+            while audio_q.qsize() >= max_audio_chunks:
+                try:
+                    audio_q.get_nowait()
+                    if not falling_behind_warned:
+                        print("[Voice Stack] Falling behind, dropping audio")
+                        falling_behind_warned = True
+                except asyncio.QueueEmpty:
+                    break
+            audio_q.put_nowait(chunk)
+        loop.call_soon_threadsafe(enqueue_chunk)
 
     try:
         import sounddevice as sd
         from vosk import KaldiRecognizer
+        wake_state = "loading"
         model = await loop.run_in_executor(None, get_vosk_model)
         samplerate = int(sd.query_devices(None, "input")["default_samplerate"])
         recognizer = KaldiRecognizer(model, samplerate)
         with sd.RawInputStream(samplerate=samplerate, blocksize=8000, dtype="int16",
                                channels=1, callback=callback):
-            print("[Voice Stack] Microphone on.")
+            wake_state = "idle"
+            print("[Voice Stack] Microphone on. Say 'Hey Sentinel'.")
             while mic_active:
                 try:
                     data = await asyncio.wait_for(audio_q.get(), timeout=0.5)
                 except asyncio.TimeoutError:
+                    data = None
+                if wake_state == "awake" and time.monotonic() > wake_deadline:
+                    print("[Wake] No command heard, back to listening for the phrase.")
+                    wake_state = "idle"
+                if data is None:
                     continue
-                if recognizer.AcceptWaveform(data):
-                    text = json.loads(recognizer.Result()).get("text", "").strip()
-                    if text:
+                decode_started = time.monotonic()
+                accepted = await loop.run_in_executor(vosk_pool, recognizer.AcceptWaveform, data)
+                if accepted:
+                    result_json = await loop.run_in_executor(vosk_pool, recognizer.Result)
+                    text = json.loads(result_json).get("text", "").strip()
+                    if not text:
+                        continue
+                    heard, rest = wake_lib.strip_wake(text)
+                    if heard and rest:
+                        print(f"[Wake] Phrase and command together: '{text}'")
+                        wake_state = "busy"
+                        loop.run_in_executor(None, wake_lib.chime)
+                        _spawn(_run_wake_command(rest))
+                    elif heard:
+                        print("[Wake] Heard the wake phrase.")
+                        wake_state = "awake"
+                        wake_deadline = time.monotonic() + 30    # do not expire while the acknowledgement plays
+                        await loop.run_in_executor(None, wake_lib.acknowledge)
+                        while not audio_q.empty():               # drop what the speaker fed back into the mic
+                            audio_q.get_nowait()
+                        await loop.run_in_executor(vosk_pool, recognizer.Reset)
+                        wake_deadline = time.monotonic() + wake_lib.WAKE_TIMEOUT
+                    elif wake_state == "awake" and not wake_lib.is_noise(text):
                         print(f"[Voice Captured]: {text}")
-                        t = asyncio.create_task(handle_voice_intent(text))
-                        _voice_bg.add(t)
-                        t.add_done_callback(_voice_bg.discard)
+                        wake_state = "busy"
+                        _spawn(_run_wake_command(text))
+                elif wake_state == "awake":
+                    partial_json = await loop.run_in_executor(vosk_pool, recognizer.PartialResult)
+                    if json.loads(partial_json).get("partial"):
+                        wake_deadline = time.monotonic() + wake_lib.WAKE_TIMEOUT   # still talking, keep waiting
+                elapsed = time.monotonic() - decode_started
+                if elapsed > len(data) / (samplerate * 2):
+                    print(f"[Voice Stack] Vosk decode took {elapsed:.2f}s for {len(data) / (samplerate * 2):.2f}s of audio")
+                await asyncio.sleep(0)
     except Exception as e:
         print(f"[Voice Stack Error]: {e}")
     finally:
         mic_active = False
+        wake_state = "idle"
+        vosk_pool.shutdown(wait=False, cancel_futures=True)
         print("[Voice Stack] Microphone off.")
 
 @app.post("/api/voice/start", dependencies=[Depends(verify_key)])
 async def start_voice_listening():
+    # Turns wake listening on (the mic button). The choice is saved and survives restarts.
     global voice_task, mic_active
+    wake_lib.save_enabled(True)
     if mic_active:
         return {"status": "already_listening"}
     mic_active = True
@@ -611,7 +727,9 @@ async def start_voice_listening():
 
 @app.post("/api/voice/stop", dependencies=[Depends(verify_key)])
 async def stop_voice_listening():
+    # Turns wake listening off: the mic stream is closed and nothing is heard until it is turned back on.
     global voice_task, mic_active
+    wake_lib.save_enabled(False)
     if not mic_active:
         return {"status": "already_stopped"}
     task, voice_task = voice_task, None
@@ -625,14 +743,51 @@ async def stop_voice_listening():
 
 @app.get("/api/voice/last_response", dependencies=[Depends(verify_key)])
 async def get_last_voice_response():
+    processing = bool(_voice_bg)
+    wake = {"enabled": mic_active, "state": wake_state if mic_active else "off"}
     if voice_replies:
         r = voice_replies.popleft()
-        return {"status": "new", "transcript": r["transcript"], "reply": r["reply"], "listening": mic_active}
-    return {"status": "empty", "listening": mic_active}
+        return {
+            "status": "new", "transcript": r["transcript"], "reply": r["reply"],
+            "listening": mic_active, "processing": processing, "wake": wake,
+        }
+    return {"status": "empty", "listening": mic_active, "processing": processing, "wake": wake}
+
+@app.on_event("startup")
+async def _wake_autostart():
+    # Wake listening is on by default. The on/off choice is saved in ~/.config/sentinel/voice.json.
+    global voice_task, mic_active
+    asyncio.get_running_loop().run_in_executor(None, wake_lib.prepare)   # builds the beep and spoken phrases (first run only)
+    if wake_lib.load_enabled():
+        mic_active = True
+        voice_task = asyncio.create_task(continuous_mic_capture())
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n  SENTINEL UI V3.1 — Backend Stack (HARDENED)")
+    print("\n  SENTINEL V2 — Backend Stack (HARDENED)")
     print("  ────────────────────────────────────────────")
     print("  http://localhost:8765")
-    uvicorn.run(app, host="0.0.0.0", port=8765, log_level="warning")
+    import socket
+    tailscale_ip = ""
+    try:
+        result = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3, check=True)
+        candidate = result.stdout.strip().splitlines()[0]
+        if candidate.startswith("100."):
+            tailscale_ip = candidate
+    except Exception as e:
+        print(f"[Network] Tailscale IPv4 unavailable; backend will listen on localhost only: {e}")
+    sockets = []
+    for bind_ip in ["127.0.0.1"] + ([tailscale_ip] if tailscale_ip else []):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((bind_ip, 8765))
+            sock.listen(2048)
+            sockets.append(sock)
+            print(f"[Network] Backend listening on {bind_ip}:8765")
+        except OSError as e:
+            sock.close()
+            print(f"[Network] Could not bind backend to {bind_ip}:8765: {e}")
+    if not sockets:
+        raise RuntimeError("Could not bind backend to localhost or Tailscale")
+    uvicorn.Server(uvicorn.Config(app, log_level="warning")).run(sockets=sockets)

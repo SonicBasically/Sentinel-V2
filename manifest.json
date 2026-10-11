@@ -1,8 +1,8 @@
 {
-  "name": "Sentinel UI V3",
+  "name": "Sentinel V2",
   "short_name": "Sentinel",
   "description": "Jarvis-style AI Assistant powered by Ollama",
-  "start_url": "/sentinel_ui_v3.html",
+  "start_url": "/sentinel_v2.html",
   "display": "standalone",
   "background_color": "#080808",
   "theme_color": "#080808",

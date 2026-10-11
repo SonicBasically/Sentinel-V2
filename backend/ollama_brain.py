@@ -51,15 +51,16 @@ def _parse_action(reply: str):
     return None
 
 
-async def process_chat_with_brain(user_message: str, use_tools: bool = True) -> dict:
-    global CONVERSATION_HISTORY
-
-    CONVERSATION_HISTORY.append({"role": "user", "content": user_message})
-    if len(CONVERSATION_HISTORY) > 20:
-        CONVERSATION_HISTORY = CONVERSATION_HISTORY[-20:]
+async def process_chat_with_brain(
+    user_message: str, use_tools: bool = True, history: list | None = None
+) -> dict:
+    history = CONVERSATION_HISTORY if history is None else history
+    history.append({"role": "user", "content": user_message})
+    if len(history) > 20:
+        del history[:-20]
 
     prompt = SYSTEM_PROMPT if use_tools else CHAT_PROMPT
-    messages = [{"role": "system", "content": prompt}] + CONVERSATION_HISTORY
+    messages = [{"role": "system", "content": prompt}] + history
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -75,11 +76,11 @@ async def process_chat_with_brain(user_message: str, use_tools: bool = True) -> 
             )
         if response.status_code == 200:
             reply = response.json().get("message", {}).get("content", "").strip()
-            CONVERSATION_HISTORY.append({"role": "assistant", "content": reply})
+            history.append({"role": "assistant", "content": reply})
             return {"reply": reply, "action": _parse_action(reply) if use_tools else None}
         logging.error(f"Ollama returned HTTP {response.status_code}")
     except Exception as e:
         logging.error(f"Ollama connection dropped: {e}")
 
-    CONVERSATION_HISTORY.pop()  # keep user/assistant turns paired after a failure
+    history.pop()  # keep user/assistant turns paired after a failure
     return {"reply": "I'm having trouble communicating with my local Ollama engine.", "action": None}

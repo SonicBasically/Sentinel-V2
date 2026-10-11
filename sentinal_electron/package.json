@@ -1,7 +1,7 @@
 {
-  "name": "sentinel-ui-v3",
+  "name": "sentinel-v2",
   "version": "3.0.0",
-  "description": "Sentinel UI V3 - Jarvis-style AI Assistant",
+  "description": "Sentinel V2 - Jarvis-style AI Assistant",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -9,7 +9,7 @@
   },
   "build": {
     "appId": "com.thomasgomez.sentinel",
-    "productName": "Sentinel UI V3",
+    "productName": "Sentinel V2",
     "linux": {
       "target": [
         "AppImage",
@@ -21,7 +21,7 @@
     "files": [
       "main.js",
       "preload.js",
-      "sentinel_ui_v3.html",
+      "sentinel_v2.html",
       "icon.png"
     ]
   },

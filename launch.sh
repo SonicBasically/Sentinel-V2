@@ -1,13 +1,21 @@
 #!/bin/bash
-# Sentinel UI V3 — Launcher
+# Sentinel V2 — Launcher
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo ""
 echo "  ╔═══════════════════════════════╗"
-echo "  ║   SENTINEL UI V3  ONLINE      ║"
+echo "  ║   SENTINEL V2  ONLINE      ║"
 echo "  ╚═══════════════════════════════╝"
 echo ""
+
+TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -n1)
+if [[ "$TAILSCALE_IP" =~ ^100\.([6-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+  echo "  Network: localhost + Tailscale ($TAILSCALE_IP)"
+else
+  TAILSCALE_IP=""
+  echo "  WARNING: Tailscale IPv4 unavailable; services will use localhost only."
+fi
 
 # Kill everything that might conflict
 echo "  [0/4] Clearing ports and processes..."
@@ -47,24 +55,21 @@ for i in $(seq 1 20); do
   echo -n "."
 done
 
-# Serve UI on all interfaces (for phone access)
-echo "  [3/4] Starting UI server on port 8766..."
-cd "$SCRIPT_DIR" && python3 -m http.server 8766 --bind 0.0.0.0 > /tmp/sentinel-ui.log 2>&1 &
-sleep 1
-
-# Get local IP for phone access
-LOCAL_IP=$(ip route get 1 2>/dev/null | awk '{for(i=1;i<=NF;i++){if($i=="src"){print $(i+1);exit}}}')
-
+# Electron starts the UI server on localhost and the Tailscale address.
 # Launch Electron app instead of Chrome
-echo "  [4/4] Launching Sentinel Electron app..."
+echo "  [3/3] Launching Sentinel Electron app and UI listeners..."
 cd "$SCRIPT_DIR/sentinal_electron" && ./node_modules/.bin/electron . &
 
 echo ""
 echo "  Backend:  http://localhost:8765"
 echo "  Ollama:   http://localhost:11434"
-echo "  UI:       http://localhost:8766/sentinel_ui_v3.html"
+echo "  UI:       http://localhost:8766/sentinel_v2.html"
 echo ""
-echo "  📱 Phone: http://$LOCAL_IP:8766/sentinel_ui_v3.html"
+if [[ -n "$TAILSCALE_IP" ]]; then
+  echo "  📱 Phone (Tailscale): http://$TAILSCALE_IP:8766/sentinel_v2.html"
+else
+  echo "  📱 Phone access unavailable until Tailscale is connected."
+fi
 SENTINEL_KEY_VAL=$(grep '^SENTINEL_API_KEY=' "$HOME/.config/sentinel/.env" 2>/dev/null | cut -d= -f2- | tr -d '"')
 echo "  🔑 API key: ${SENTINEL_KEY_VAL:-NOT FOUND — check ~/.config/sentinel/.env}"
 echo ""

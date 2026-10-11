@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Exec="/home/thomasgomez/Desktop/OG_Drive/Sentinal V2/sentinal_electron/setup_electron.sh"
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name[en_US]=Sentinel V2
+Name=/home/thomasgomez/Desktop/OG_Drive/Sentinal V2/launch.sh
+Comment[en_US]=
+Comment=

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sentinel UI V3 — Electron Setup
+# Sentinel V2 — Electron Setup
 # Run once: bash setup_electron.sh
 # Then launch: bash setup_electron.sh run
 
@@ -19,14 +19,14 @@ install() {
 
 run() {
   echo ""
-  echo "  Launching Sentinel UI V3..."
+  echo "  Launching Sentinel V2..."
   cd "$SCRIPT_DIR"
   npx electron .
 }
 
 build() {
   echo ""
-  echo "  Building Sentinel UI V3 AppImage..."
+  echo "  Building Sentinel V2 AppImage..."
   cd "$SCRIPT_DIR"
   npx electron-builder --linux AppImage
   echo ""

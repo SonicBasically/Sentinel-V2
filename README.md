@@ -16,7 +16,7 @@ Built and tested on Pop!_OS 24.04. A personal hobby project, so expect rough edg
 - **Media player** - music library, playlists (including `.wpl` import), now-playing bar
 - **Game launcher** - scans Steam and other launchers and launches games from the UI or chat
 - **Connected devices** - a Tailscale-based panel for your other machines and phone
-- **Voice** - push-to-talk (Vosk) with spoken replies (Festival TTS); see Known gaps
+- **Voice** - push-to-talk (Vosk) with spoken replies (browser speech synthesis in the UI; the backend also has a separate Festival-based `/tts` endpoint the UI doesn't use); see Known gaps
 - **File analysis** - attach or drag in text, code or config files
 
 ## Quick start
@@ -33,7 +33,7 @@ bash launch.sh
 
 `launch.sh` starts, in order: the backend (`server.py`, port 8765), Ollama (port 11434),
 the UI server (port 8766), then the Electron app. The UI is also reachable in a browser at
-`http://localhost:8766/sentinel_ui_v3.html`, and from other devices on your network or
+`http://localhost:8766/sentinel_v2.html`, and from other devices on your network or
 tailnet at the same path.
 
 Models used (pull what you like):
@@ -46,12 +46,14 @@ ollama pull codellama    # code tasks
 
 ## Security
 
-- All backend routes require an API key sent as the `X-Api-Key` header
+- Control routes require an API key sent as the `X-Api-Key` header. Exceptions: the public
+  health check `GET /`, and the media stream/art routes, which use short-lived tokens. The
+  auto-generated `/docs`, `/redoc` and `/openapi.json` pages are turned off
 - The key is read from the `SENTINEL_API_KEY` environment variable or from
   `~/.config/sentinel/.env`. The server will not start without it. There is no fallback
 - The UI keeps the key in the browser's `localStorage` (`sentinel_api_key`) and asks for it
   on first use
-- Never commit a key. `.env` files are git-ignored
+- Never commit a key. `.env` and `*.env` files are git-ignored (other names like `.env.local` are not)
 - **Heads up:** the backend, UI server and Ollama listen on all interfaces, and the backend
   has a shell-command route. The API key is the main protection, so use a strong one and
   keep the machine on a trusted network. Binding to localhost and using `tailscale serve`
@@ -62,20 +64,21 @@ ollama pull codellama    # code tasks
 | Path | What it is |
 |---|---|
 | `server.py` | The live backend (FastAPI, port 8765) |
-| `sentinel_ui_v3.html` | The whole frontend, one file |
+| `sentinel_v2.html` | The whole frontend, one file |
 | `media.py` | Music player backend |
 | `games.py` | Game library scanning and launching |
+| `voice_commands.py` | Direct app/game, desktop music, and volume commands used by voice and chat |
 | `modes/` | Context docs for each mode (`core.md` plus one per mode) |
 | `sentinal_electron/` | Electron wrapper (folder name typo is historical) |
-| `tools/` | `selfcheck.sh` (syntax and smoke test), `patch_once.py` (backed-up single edit) |
-| `backend/` | Older modular backend (`main.py`, `ollama_brain.py`, `security_shield.py`). Not launched by anything yet |
+| `tools/` | `selfcheck.sh` (syntax and smoke test), `patch_once.py` (backed-up single edit), `test_voice_commands.py` (parse-only checks) |
+| `backend/` | Older modular backend (`main.py`, `ollama_brain.py`, `security_shield.py`). `main.py` is not launched by anything; the live `server.py` imports `ollama_brain.py` for voice replies |
 | `launch.sh` / `setup.sh` | Start everything / install and run the backend |
 | `backups/` | Backup copies of files made before edits |
 | `OLD STUFF/` | Retired files |
 
 ## Backend API (port 8765)
 
-Route groups in `server.py` (all need the API key):
+Route groups in `server.py` (all need the API key except `GET /` and the token-authenticated media stream/art routes):
 
 | Group | Routes |
 |---|---|
@@ -88,14 +91,15 @@ Route groups in `server.py` (all need the API key):
 | Games | `/games`, `/games/rescan`, `/games/resolve`, `/games/art/{id}`, `/games/launch` |
 | Modes | `/modes`, `/modes/{mode}` |
 | Voice | `/api/voice/start`, `/api/voice/stop`, `/api/voice/last_response` |
+| Direct commands | `POST /command` (body: `{"text":"..."}`; apps/games, desktop music, and volume; unmatched text falls through to chat) |
 | Actions | `/api/action` |
 
 Media player routes live in `media.py`. Read `server.py` for the current, exact list.
 
 ## Known gaps
 
-- Voice (Vosk mic capture, replies queued for the UI to poll) is in `server.py`, but voice
-  replies use `backend/ollama_brain.py` and do not use the mode docs
+- Voice uses Vosk in `server.py`; recognized app/game/music/volume commands run through
+  `voice_commands.py`, while other speech goes to `backend/ollama_brain.py` without mode docs
 - The first-run API key prompt can fail inside Electron (no `window.prompt()`)
 - Some text-to-speech and microphone quirks remain from earlier versions
 
