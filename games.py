@@ -4,6 +4,7 @@ Games are launched by library ID only; nothing here runs free-form commands.
 Custom launchers live in custom_games.json (edit it by hand, it is never written by the API).
 """
 import os, re, json, glob, shutil, struct, subprocess, threading, time, difflib
+import urllib.request, urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -190,7 +191,153 @@ def find_art(game_id):
         icon = _theme_icon(hint)
         if icon:
             return icon, "icon"
+    return _cached_art(game_id)
+
+
+# ── SteamGridDB art (only for games that have no art of their own) ───
+# Needs STEAMGRIDDB_API_KEY (env var or ~/.config/sentinel/.env). Without it this is a no-op.
+# Downloaded images are cached in art_cache/ as <id>.<kind>.<ext>; misses are remembered for a week.
+ART_CACHE = HERE / "art_cache"
+MISS_FILE = ART_CACHE / "_misses.json"
+SGDB_BASE = "https://www.steamgriddb.com/api/v2"
+SGDB_RETRY_SECONDS = 7 * 86400
+SGDB_MAX_BYTES = 6 * 1024 * 1024
+_sgdb_running = False
+
+
+def _sgdb_key():
+    key = os.environ.get("STEAMGRIDDB_API_KEY")
+    if key:
+        return key.strip()
+    cfg = Path.home() / ".config" / "sentinel" / ".env"
+    try:
+        for line in cfg.read_text().splitlines():
+            if line.startswith("STEAMGRIDDB_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"\'')
+    except OSError:
+        pass
     return None
+
+
+def _safe_id(game_id):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", game_id)
+
+
+def _cached_art(game_id):
+    if not ART_CACHE.is_dir():
+        return None
+    for f in sorted(ART_CACHE.glob(_safe_id(game_id) + ".*")):
+        parts = f.name.rsplit(".", 2)
+        if len(parts) == 3 and parts[2].lower() in tuple(e[1:] for e in _IMG_EXT) and parts[1] in ("wide", "portrait"):
+            return f, parts[1]
+    return None
+
+
+def _load_misses():
+    try:
+        return json.loads(MISS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_misses(m):
+    try:
+        ART_CACHE.mkdir(exist_ok=True)
+        MISS_FILE.write_text(json.dumps(m))
+    except OSError:
+        pass
+
+
+def _sgdb_request(url, key):
+    return urllib.request.Request(url, headers={"Authorization": "Bearer " + key, "User-Agent": "Sentinel-V2"})
+
+
+def _trusted_art_url(url):
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return (parsed.scheme == "https" and (host == "steamgriddb.com" or host.endswith(".steamgriddb.com"))
+            and not parsed.username and not parsed.password and not parsed.port)
+
+
+class _SteamGridDBRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _trusted_art_url(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _sgdb_get(path, key, params=None):
+    url = SGDB_BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    opener = urllib.request.build_opener(_SteamGridDBRedirects())
+    with opener.open(_sgdb_request(url, key), timeout=15) as r:
+        j = json.loads(r.read().decode("utf-8", "replace"))
+    return j.get("data") if j.get("success") else None
+
+
+def _sgdb_fetch(game, key):
+    """Try to download art for one game. True = saved, False = no match. Network errors raise."""
+    q = _norm(game["name"])
+    results = _sgdb_get("/search/autocomplete/" + urllib.parse.quote(game["name"], safe=""), key) or []
+    scored = sorted(((difflib.SequenceMatcher(None, q, _norm(r.get("name", ""))).ratio(), r) for r in results[:6]),
+                    key=lambda x: -x[0])
+    if not scored or scored[0][0] < 0.6:
+        return False
+    cutoff = max(0.6, scored[0][0] - 0.05)
+    for score, cand in [x for x in scored if x[0] >= cutoff][:3]:  # same-name entries: first one may have no art
+        gid = cand["id"]
+        for dims, kind in (("460x215,920x430", "wide"), ("600x900", "portrait")):
+            grids = _sgdb_get("/grids/game/%d" % gid, key, {"dimensions": dims, "types": "static", "nsfw": "false",
+                                                            "humor": "false", "mimes": "image/png,image/jpeg,image/webp"})
+            for g in grids or []:
+                url = g.get("url") or ""
+                parsed = urllib.parse.urlparse(url)
+                ext = Path(parsed.path).suffix.lower()
+                if not _trusted_art_url(url) or ext not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                opener = urllib.request.build_opener(_SteamGridDBRedirects())
+                with opener.open(urllib.request.Request(url, headers={"User-Agent": "Sentinel-V2"}), timeout=20) as r:
+                    data = r.read(SGDB_MAX_BYTES + 1)
+                if not data or len(data) > SGDB_MAX_BYTES:
+                    continue
+                ART_CACHE.mkdir(exist_ok=True)
+                tmp = ART_CACHE / (_safe_id(game["id"]) + ".part")
+                tmp.write_bytes(data)
+                tmp.replace(ART_CACHE / ("%s.%s%s" % (_safe_id(game["id"]), kind, ext)))
+                return True
+    return False
+
+
+def _sgdb_worker():
+    global _sgdb_running
+    try:
+        key = _sgdb_key()
+        if not key:
+            return
+        misses = _load_misses()
+        now = time.time()
+        with _lock:
+            todo = [dict(g) for g in _library]
+        todo = [g for g in todo if find_art(g["id"]) is None and now - misses.get(g["id"] + "|" + g["name"], 0) > SGDB_RETRY_SECONDS]
+        for g in todo:
+            try:
+                ok = _sgdb_fetch(g, key)
+            except Exception:
+                break  # network/auth problem: stop quietly, try again on the next restart
+            if not ok:
+                misses[g["id"] + "|" + g["name"]] = time.time()  # keyed by name too, so a rename retries
+                _save_misses(misses)
+            time.sleep(0.5)
+    finally:
+        _sgdb_running = False
+
+
+def _kick_sgdb():
+    global _sgdb_running
+    with _lock:
+        if _sgdb_running or not _sgdb_key():
+            return
+        _sgdb_running = True
+    threading.Thread(target=_sgdb_worker, daemon=True).start()
 
 
 # ── scanning ─────────────────────────────────────────────────────────
@@ -237,11 +384,15 @@ def scan():
 def refresh(force=False):
     global _library, _signature, _last_scan
     sig = _compute_signature()
+    changed = False
     with _lock:
         if force or sig != _signature:
             _library = scan()
             _signature = sig
             _last_scan = time.time()
+            changed = True
+    if changed:
+        _kick_sgdb()
 
 
 def _watch():

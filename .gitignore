@@ -13,3 +13,6 @@ __pycache__/
 .venv/
 venv/
 backend/venv/
+
+# Downloaded game art (SteamGridDB cache)
+art_cache/

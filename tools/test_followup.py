@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Tests the read-only command classifier in sentinel_v2.html (the part that decides what runs
+without asking). Extracts the READONLY block and runs it under node. Usage: python3 tools/test_followup.py"""
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+html = (ROOT / "sentinel_v2.html").read_text(encoding="utf-8")
+m = re.search(r"// ── READONLY-START.*?// ── READONLY-END ──", html, re.S)
+if not m:
+    print("FAIL: READONLY block not found"); sys.exit(1)
+
+SAFE = [
+    "df -h", "ls -la ~/Desktop", "journalctl -u ollama -n 50 --no-pager", "systemctl status ollama",
+    "systemctl --failed", "ps aux | grep python", "free -h", "nvidia-smi",
+    "nvidia-smi --query-gpu=temperature.gpu,memory.used --format=csv,noheader",
+    "du -sh * | sort -h | tail -5", "du -xh --max-depth=1 ~ 2>/dev/null | sort -h | tail -12", "ip addr", "ip -br link", "df -h | awk '{print $5}'",
+    "git status", "git log --oneline -n 5", "ss -ltnp 2>/dev/null", "dpkg -l | grep nvidia",
+    "find . -name '*.py'", "date +%F", "top -bn1 | head -5", "echo \"a|b\"", "uname -a && uptime",
+    "ls /tmp 2>&1", "cat /etc/os-release", "lsblk", "sensors", "apt list --installed | head", "uniq -c",
+    "free -h; df -h", "ps -ef", "ps -u thomasgomez", "ps aux", "ls *.py", "sort -h", "sort -S 1 f", "sed -n '10,40p' server.py", "sed -n '$p' file", "cat f | sed -n '/error/p'",  "journalctl -p warning -n 50 --no-pager 2>/dev/null",
+]
+UNSAFE = [
+    "rm -rf x", "sudo apt update", "cat a > b", "echo hi > f", "echo x >> y", "ls; rm x", "ls && reboot",
+    "ls || rm x", "ls\nrm x", "ls & rm x", "cat ~/.config/sentinel/.env", "cat .env", "cat ~/.ssh/id_rsa",
+    "ls $(rm x)", "ls `id`", "ls <(rm x)", "find . -delete", "find . -exec rm {} ;", "sort -o f x",
+    "systemctl restart ollama", "systemctl stop x", "journalctl --vacuum-time=1d", "journalctl -f",
+    "ip link set eth0 down", "ip addr add 1.2.3.4/24 dev eth0", "tail -f log", "apt install x",
+    "kill 123", "pkill firefox", "curl http://x", "python3 x.py", "sed -i s/a/b/ f", "awk 'BEGIN{system(\"rm x\")}'",
+    "ls | tee x", "du -xh --max-depth=1 ~ 2>/dev/null | sort -h | tail -12 > sizes.txt", "date -s 10:00", "date 101012002026", "dmesg -c", "nvidia-smi -pm 1", "nvidia-smi --gpu-reset",
+    "cat file | sh", "git push", "git branch newbranch", "git commit -m x", "ss -K", "", "   ", "ls -la <(rm x)",
+    "mv a b", "cp a b", "touch x", "mkdir x", "chmod 777 x", "dd if=/dev/zero of=x", "hostname newname",
+    "echo \"$(rm x)\"", "grep password file", "cat /etc/passwd", "awk '{print $1 > \"x\"}'", "uniq a b",
+    "sed -i s/a/b/ f", "sed -n 'w out' f", "sed -n '1,5p' f > g", "sed -e '1d' f", "sed -n 'e' f", "reboot", "shutdown now", "ls 'unterminated",
+    # 2026-10-21 security sweep: these used to auto-run
+    "cat /proc/self/environ", "ps eww", "ps aeux", "ps e", "sort -S 1 --compress-program=sh /etc/hosts", "sort --files0-from=x",
+    "cat ~/.s*/id_r*", "cat ~/.config/sent*/.e*", "cat .bash_h*", "cat ~/.config/google-chrome/Default/Cookies",
+    "cat ~/.{ss,x}h/id_rsa", "cat /home/*/.ssh/id_rsa", "ls ~/.config/sentinel",
+]
+js = m.group(0) + "\nvar DANGEROUS={reboot:1,shutdown:1,suspend:1};\n" + """
+var safe=%s, unsafe=%s, bad=[];
+safe.forEach(function(c){if(!isReadOnlyCommand(c))bad.push('should be read-only: '+JSON.stringify(c));});
+unsafe.forEach(function(c){if(isReadOnlyCommand(c))bad.push('should ask first: '+JSON.stringify(c));});
+[[{type:'reboot'},true],[{type:'run_command',command:'df -h'},false],[{type:'run_command',command:'rm x'},true],
+ [{type:'kill_app',app:'x'},true],[{type:'close_window'},true],[{type:'open_url',url:'https://x'},false],
+ [{type:'set_volume',level:5},false],[{type:'write_file',path:'/x'},true],[{type:'launch_game',name:'x'},false]
+].forEach(function(p){if(needsConfirm(p[0])!==p[1])bad.push('needsConfirm '+JSON.stringify(p[0])+' expected '+p[1]);});
+console.log(JSON.stringify({bad:bad,total:safe.length+unsafe.length+9}));
+""" % (json.dumps(SAFE), json.dumps(UNSAFE))
+r = subprocess.run(["node", "-e", js], capture_output=True, text=True)
+if r.returncode != 0:
+    print("node error:\n" + r.stderr[:800]); sys.exit(1)
+out = json.loads(r.stdout.strip().splitlines()[-1])
+for b in out["bad"]:
+    print("FAIL", b)
+print(f"{out['total'] - len(out['bad'])}/{out['total']} cases passed")
+sys.exit(1 if out["bad"] else 0)

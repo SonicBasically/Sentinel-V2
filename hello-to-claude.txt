@@ -1,2 +1,0 @@
-Hello to Claude!
-I can make and access this folder.

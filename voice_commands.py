@@ -1,7 +1,7 @@
 """Voice and chat commands that run directly, without asking the language model.
 
 Handles: open a game or app, music controls (play/pause/resume/next/previous via
-playerctl, so desktop players like Spotify or a browser), and volume (up, down, set).
+playerctl, so desktop players like Spotify or a browser), "what's playing", and volume (up, down, set).
 
 parse_command(text) is pure (no side effects) and returns an intent or None.
 try_command(text, app_aliases) runs the intent and returns {"handled", "ok", "reply"}
@@ -148,18 +148,48 @@ def _parse_web(text):
     return None
 
 
+# "what's playing right now" questions (apostrophes are already stripped by _normalize)
+_NOWPLAYING_RES = [re.compile(p) for p in (
+    r"^(?:whats|what is) (?:currently |now |the )?(?:playing|now playing)(?: right now| now)?$",
+    r"^(?:whats|what is) (?:the )?(?:current|this|that|playing) (?:song|track|tune|music)(?: right now| now)?$",
+    r"^what (?:song|track|tune|music) (?:is|are) (?:this|that|playing|on)(?: right now| now)?$",
+    r"^what (?:song|track|tune) am i (?:listening to|hearing)(?: right now| now)?$",
+    r"^what am i (?:listening to|hearing)(?: right now| now)?$",
+    r"^(?:who sings|who is singing|who plays|who is playing) (?:this|that)(?: song| track)?$",
+    r"^(?:whats|what is) (?:the )?name of (?:this|that|the current) (?:song|track)$",
+)]
+
+
 def parse_command(text):
     """Return an intent dict, or None if the text is not a command we handle."""
     t = _normalize(text)
     if not t or len(t.split()) > 12:
         return None
 
+    # ---- personality switching (also works through the spoken command path) ----
+    aliases = {"sentinel":"sentinel", "default":"sentinel", "sayori":"sayori", "monika":"monika", "natsuki":"natsuki",
+               "subaru":"subaru", "subaru natsuki":"subaru", "beatrice":"beatrice", "beatrice-sama":"beatrice",
+               "reinhard":"reinhard", "regulus":"regulus", "regulus corneas":"regulus", "regulus cornas":"regulus", "thomas":"thomas", "me":"thomas"}
+    m = re.match(r"^(?:switch|change|set)(?: my)? (?:personality|persona)(?: to)? (.+)$|^switch to (.+)$", t)
+    if m:
+        name = (m.group(1) or m.group(2) or "").strip()
+        key = aliases.get(name)
+        if key:
+            return {"kind": "personality", "name": key}
+
     # ---- websites and web searches (before volume, so "search for sound effects" is not eaten) ----
     web = _parse_web(text)
     if web:
         return web
 
+    # ---- what is playing right now ----
+    if any(r.match(t) for r in _NOWPLAYING_RES):
+        return {"kind": "nowplaying"}
+
     # ---- music: generic words only, so "play half life" still reaches the game rule ----
+    # Vosk often writes "pause" as one of these; only counts when a music word follows ("cause my music")
+    if re.match(r"^(?:cause|caused|paws|pours|pores|paus|pose|pals) (?:my |the )?(?:music|song|songs|tunes|audio|playback)$", t):
+        return {"kind": "media", "action": "pause"}
     m = re.match(r"^(resume|continue|unpause|play|start|keep playing)(?: playing)?"
                  r"(?: (?:my|the))?(?: (%s))?$" % _MEDIA_NOUN, t)
     if m and (m.group(2) or m.group(1) != "start"):
@@ -237,6 +267,34 @@ def _run_media(action):
     return _result("Next track." if action == "next" else "Previous track.")
 
 
+def _describe(p):
+    title = (p.get("title") or "").strip()[:110]
+    artist = (p.get("artist") or "").strip()[:60]
+    if not title:
+        return ""
+    return "%s by %s" % (title, artist) if artist else title
+
+
+def _run_nowplaying():
+    try:
+        players = media_lib.now_playing()
+    except Exception:
+        players = []
+    if not players:
+        return _result("I don't see a music player running.", False)
+    playing = [p for p in players if p["status"] == "Playing"]
+    if playing:
+        p = playing[0]
+        what = _describe(p)
+        if what:
+            return _result("Playing %s." % what)
+        return _result("%s is playing, but it isn't telling me the song name." % p["name"].capitalize())
+    paused = [p for p in players if p["status"] == "Paused" and _describe(p)]
+    if paused:
+        return _result("Nothing is playing right now. %s is paused." % _describe(paused[0]))
+    return _result("Nothing is playing right now.")
+
+
 def _pactl(*args):
     return subprocess.run(["pactl", *args], capture_output=True, text=True, timeout=5, env=media_lib._env())
 
@@ -292,9 +350,11 @@ def _run_open(intent, app_aliases):
         if out.get("ok"):
             return _result("Launching %s." % res["best"]["name"])
         return _result("I found %s but couldn't launch it." % res["best"]["name"], False)
-    near = [c["name"] for c in res.get("candidates", []) if c.get("score", 0) >= 0.6][:3]
+    near = [c for c in res.get("candidates", []) if c.get("score", 0) >= 0.6][:3]
     if near:
-        return _result("Which one did you mean: %s?" % ", ".join(near), False)
+        out = _result("Which one did you mean: %s?" % ", ".join(c["name"] for c in near), False)
+        out["choices"] = [{"id": c["id"], "name": c["name"]} for c in near]  # lets the voice stack take the answer
+        return out
     if verb in ("open", "launch"):
         return None  # unknown open/launch targets can be handled by the chat model
     return None  # "play/start/run <something else>" is not ours; let the chat model answer
@@ -320,15 +380,71 @@ def _run_web(intent):
     return _result(intent["reply"])
 
 
+# ───────────────────────── answering "Which one did you mean?" ─────────────────────────
+_ORDINALS = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2}
+_FILLER = {"the", "a", "an", "please", "number", "option", "one", "uh", "um", "let", "s", "lets", "go", "with", "i", "mean", "meant"}
+_CANCEL = {"cancel", "never mind", "nevermind", "forget it", "no", "nope", "none", "none of them", "stop", "neither"}
+
+
+def _pnorm(s):
+    toks = re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower().replace("'", "")).split()
+    return [str(_UNITS[w]) if w in _UNITS else w for w in toks]
+
+
+def pick_choice(text, choices):
+    """Which of `choices` (dicts with id and name) did the user mean? Returns a choice, "cancel", or None."""
+    t = " ".join(_pnorm(_normalize(text)))
+    if not t or not choices:
+        return None
+    if t in _CANCEL:
+        return "cancel"
+    core = [w for w in t.split() if w not in _FILLER]
+    names = [_pnorm(c["name"]) for c in choices]
+    # "the second one", "number two", "last one": only ordinal or number words were said
+    spoken = [w for w in t.split() if w not in _FILLER - {"one"}]
+    ords = [w for w in spoken if w in _ORDINALS or w == "last" or w.isdigit()]
+    if spoken and len(ords) >= 1 and all(w in _ORDINALS or w in ("last", "one") or w.isdigit() for w in spoken):
+        first = ords[0]
+        idx = len(choices) - 1 if first == "last" else _ORDINALS[first] if first in _ORDINALS else int(first) - 1
+        return choices[idx] if 0 <= idx < len(choices) else None
+    if not core:
+        return None
+    for c, n in zip(choices, names):
+        if core == n:
+            return c
+    hits = [c for c, n in zip(choices, names) if all(w in n for w in core)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def answer_choice(text, choices):
+    """Run the answer to a "Which one did you mean?" question. None if the text is not an answer to it."""
+    pick = pick_choice(text, choices)
+    if pick is None:
+        return None
+    if pick == "cancel":
+        return _result("Okay, never mind.")
+    out = game_lib.launch(pick["id"])
+    if out.get("ok"):
+        return _result("Launching %s." % pick["name"])
+    return _result("I found %s but couldn't launch it." % pick["name"], False)
+
+
 def try_command(text, app_aliases=None):
     """Run a recognized command. Returns None if `text` is not a command."""
     intent = parse_command(text)
     if not intent:
         return None
+    if intent["kind"] == "personality":
+        labels = {"sentinel":"Sentinel", "sayori":"Sayori", "monika":"Monika", "natsuki":"Natsuki", "subaru":"Subaru Natsuki", "beatrice":"Beatrice", "reinhard":"Reinhard", "regulus":"Regulus", "thomas":"Me"}
+        out = _result("Okay, switching to " + labels.get(intent["name"], intent["name"]) + ".")
+        out["personality"] = intent["name"]
+        return out
     if intent["kind"] == "web":
         return _run_web(intent)
     if intent["kind"] == "media":
         return _run_media(intent["action"])
+    if intent["kind"] == "nowplaying":
+        return _run_nowplaying()
     if intent["kind"] == "volume":
         return _run_volume(intent)
     return _run_open(intent, app_aliases)

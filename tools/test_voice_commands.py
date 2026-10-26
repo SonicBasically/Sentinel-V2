@@ -6,10 +6,13 @@ import voice_commands as vc
 
 M = lambda a: {"kind": "media", "action": a}
 V = lambda mode, v: {"kind": "volume", "mode": mode, "value": v}
+NP = {"kind": "nowplaying"}
 O = lambda verb, name: {"kind": "open", "verb": verb, "name": name}
 CASES = [
     ("resume my music", M("play")), ("Resume music.", M("play")), ("play", M("play")),
     ("play my music", M("play")), ("unpause", M("play")), ("start the music", M("play")),
+    ("cause my music", M("pause")), ("cause the music", M("pause")), ("paws my music", M("pause")),
+    ("cause", None), ("cause I said so", None), ("because the music is loud", None),
     ("pause", M("pause")), ("pause the music", M("pause")), ("stop the music", M("pause")),
     ("next song", M("next")), ("skip", M("next")), ("skip this song", M("next")), ("play the next track", M("next")),
     ("previous song", M("previous")), ("go back", M("previous")), ("last song", M("previous")),
@@ -18,6 +21,11 @@ CASES = [
     ("set volume to fifty", V("set", 50)), ("set the volume to 35%", V("set", 35)),
     ("volume sixty five", V("set", 65)), ("volume one hundred", V("set", 100)),
     ("turn the volume down to thirty", V("set", 30)),
+    ("what's playing", NP), ("what is playing right now", NP), ("what song is this", NP),
+    ("whats the current song", NP), ("what am I listening to", NP), ("who sings this", NP),
+    ("hey sentinel what's playing", NP), ("what song is playing now", NP),
+    ("what's the weather", None), ("what is playing at the movies", None), ("who is this", None),
+    ("what is the name of this song", NP), ("what's a good song", None),
     ("open half life", O("open", "half life")), ("launch the game minecraft", O("launch", "minecraft")),
     ("hey sentinel please open firefox", O("open", "firefox")), ("play half life", O("play", "half life")),
     ("open vs code", O("open", "vs code")),

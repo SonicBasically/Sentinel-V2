@@ -19,12 +19,16 @@ fi
 
 # Kill everything that might conflict
 echo "  [0/4] Clearing ports and processes..."
-pkill -9 -f "ollama" 2>/dev/null
+# If Ollama runs as the systemd unit, leave it alone: it is root-owned, and its bind address
+# lives in /etc/systemd/system/ollama.service.d/override.conf.
+OLLAMA_SYSTEMD=0
+if systemctl is-active --quiet ollama.service 2>/dev/null; then OLLAMA_SYSTEMD=1; fi
+if [ "$OLLAMA_SYSTEMD" = 0 ]; then pkill -9 -f "ollama" 2>/dev/null; fi
 pkill -9 -f "server.py" 2>/dev/null
 pkill -9 -f "http.server 8766" 2>/dev/null
 fuser -k 8765/tcp 2>/dev/null
 fuser -k 8766/tcp 2>/dev/null
-fuser -k 11434/tcp 2>/dev/null
+if [ "$OLLAMA_SYSTEMD" = 0 ]; then fuser -k 11434/tcp 2>/dev/null; fi
 sleep 2
 echo "        Done."
 
@@ -42,9 +46,13 @@ for i in $(seq 1 20); do
   echo -n "."
 done
 
-# Start Ollama on all interfaces and wait for it
-echo "  [2/4] Starting Ollama..."
-OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS="*" /snap/ollama/current/bin/ollama serve > /tmp/ollama.log 2>&1 &
+# Ollama stays private; browser traffic goes through the API-key-authenticated backend.
+if [ "$OLLAMA_SYSTEMD" = 1 ]; then
+  echo "  [2/4] Using the ollama.service systemd unit (bind address is set in its override.conf)..."
+else
+  echo "  [2/4] Starting Ollama on loopback..."
+  OLLAMA_HOST=127.0.0.1 /snap/ollama/current/bin/ollama serve > /tmp/ollama.log 2>&1 &
+fi
 echo -n "        Waiting for Ollama"
 for i in $(seq 1 20); do
   sleep 1

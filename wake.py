@@ -12,6 +12,8 @@ import difflib, json, math, os, random, re, shutil, struct, subprocess, wave
 from pathlib import Path
 
 WAKE_TIMEOUT = float(os.environ.get("SENTINEL_WAKE_TIMEOUT", "6"))   # seconds of silence after waking before going back to idle
+FOLLOWUP_ENABLED = os.environ.get("SENTINEL_FOLLOWUP", "1") != "0"   # open the mic by itself after Sentinel asks a question
+FOLLOWUP_TIMEOUT = float(os.environ.get("SENTINEL_FOLLOWUP_TIMEOUT", "8"))   # seconds to wait for the answer to start
 
 # Spoken after the beep. Edit freely: new phrases are built the next time the backend starts.
 ACK_PHRASES = [
@@ -50,6 +52,19 @@ def strip_wake(text):
         if best >= 0.75:
             return True, " ".join(orig[i + 1 + best_n:]).strip(" ,.!?")
     return False, (text or "")
+
+# Closing offers the model tacks onto answers ("Anything else?"). They end in "?" but are not real questions.
+_GENERIC_CLOSERS = re.compile(
+    r"\b(?:anything else|anything more|something else|how (?:can|may) i (?:help|assist)|"
+    r"what can i (?:do|help)|need (?:anything|any help|help)|can i help)\b", re.I)
+
+def is_question(reply):
+    """True if the reply ends by asking the user something that needs an answer."""
+    t = re.sub(r"<[^>]*>", "", reply or "").strip().rstrip("\"')]}*_` \n")
+    if not t.endswith("?"):
+        return False
+    last = re.split(r"[.!?]\s+|\n+", t[:-1])[-1].strip()   # the last sentence ("S.T.A.L.K.E.R." stays whole)
+    return len(last) >= 2 and not _GENERIC_CLOSERS.search(last)
 
 def is_noise(text):
     """True for stray one-word blips Vosk writes for background noise ("the", "uh")."""

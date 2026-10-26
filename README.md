@@ -34,7 +34,8 @@ bash launch.sh
 `launch.sh` starts, in order: the backend (`server.py`, port 8765), Ollama (port 11434),
 the UI server (port 8766), then the Electron app. The UI is also reachable in a browser at
 `http://localhost:8766/sentinel_v2.html`, and from other devices on your network or
-tailnet at the same path.
+tailnet at the same path. Ollama listens on loopback only; the UI reaches it through the
+API-key-authenticated backend proxy.
 
 Models used (pull what you like):
 
@@ -54,10 +55,12 @@ ollama pull codellama    # code tasks
 - The UI keeps the key in the browser's `localStorage` (`sentinel_api_key`) and asks for it
   on first use
 - Never commit a key. `.env` and `*.env` files are git-ignored (other names like `.env.local` are not)
-- **Heads up:** the backend, UI server and Ollama listen on all interfaces, and the backend
-  has a shell-command route. The API key is the main protection, so use a strong one and
-  keep the machine on a trusted network. Binding to localhost and using `tailscale serve`
-  is a planned hardening step
+- Ollama binds to loopback and the browser uses the API-key-authenticated backend proxy.
+  The backend listens on loopback and the detected Tailscale address; the UI is reachable
+  over Tailscale. Use a strong API key and keep the tailnet trusted.
+- Five invalid keys from one client are temporarily locked out. The shell-command route
+  rejects common destructive commands, shell expansions, credential paths and write
+  redirection; it remains sensitive because it can launch system commands.
 
 ## Project layout
 
@@ -91,7 +94,7 @@ Route groups in `server.py` (all need the API key except `GET /` and the token-a
 | Games | `/games`, `/games/rescan`, `/games/resolve`, `/games/art/{id}`, `/games/launch` |
 | Modes | `/modes`, `/modes/{mode}` |
 | Voice | `/api/voice/start`, `/api/voice/stop`, `/api/voice/last_response` |
-| Direct commands | `POST /command` (body: `{"text":"..."}`; apps/games, desktop music, and volume; unmatched text falls through to chat) |
+| Direct commands | `POST /command` (body: `{"text":"..."}`; apps/games, desktop music, "what's playing", and volume; unmatched text falls through to chat) |
 | Actions | `/api/action` |
 
 Media player routes live in `media.py`. Read `server.py` for the current, exact list.

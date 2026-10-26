@@ -1,0 +1,226 @@
+"""Optional Gemini provider for Sentinel. Ollama stays the default; this only runs when the UI asks for it.
+
+The Gemini key never reaches the browser. It is read from the GEMINI_API_KEY env var or from
+~/.config/sentinel/.env (same place as SENTINEL_API_KEY). GEMINI_MODEL there overrides the default model.
+
+stream_chat() takes Ollama-style messages ({role, content, images?}) and yields Ollama-style NDJSON lines
+({"message": {"content": ...}}), so the UI's existing streaming code works unchanged.
+"""
+import json
+import os
+from pathlib import Path
+
+import httpx
+
+DEFAULT_MODEL = "gemini-flash-lite-latest"
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+
+class GeminiError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def _setting(name):
+    value = os.environ.get(name)
+    if value:
+        return value.strip()
+    cfg = Path.home() / ".config" / "sentinel" / ".env"
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip('"')
+    return ""
+
+
+def api_key():
+    return _setting("GEMINI_API_KEY")
+
+
+def model_name():
+    return _setting("GEMINI_MODEL") or DEFAULT_MODEL
+
+
+DEFAULT_DESKTOP_MODEL = "gemini-flash-lite-latest"  # the slower flash models take 35-70s per answer, too slow for a step loop
+
+
+def desktop_model_name():
+    return _setting("GEMINI_DESKTOP_MODEL") or DEFAULT_DESKTOP_MODEL
+
+
+def _mime(b64):
+    if b64.startswith("iVBOR"):
+        return "image/png"
+    if b64.startswith("R0lGOD"):
+        return "image/gif"
+    if b64.startswith("UklGR"):
+        return "image/webp"
+    return "image/jpeg"
+
+
+def to_gemini(messages):
+    """Ollama chat messages -> Gemini request body. System messages become systemInstruction."""
+    system_parts, contents = [], []
+    for m in messages:
+        role, text = m.get("role"), m.get("content") or ""
+        if role == "system":
+            if text:
+                system_parts.append(text)
+            continue
+        parts = [{"text": text}] if text else []
+        for img in m.get("images") or []:
+            parts.append({"inline_data": {"mime_type": _mime(img), "data": img}})
+        if not parts:
+            continue
+        who = "model" if role == "assistant" else "user"
+        if contents and contents[-1]["role"] == who:
+            contents[-1]["parts"].extend(parts)  # Gemini wants strictly alternating roles
+        else:
+            contents.append({"role": who, "parts": parts})
+    if contents and contents[0]["role"] == "model":
+        contents.insert(0, {"role": "user", "parts": [{"text": "(conversation continues)"}]})
+    body = {"contents": contents}
+    if system_parts:
+        body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+    return body
+
+
+def _line(text):
+    return json.dumps({"message": {"role": "assistant", "content": text}, "done": False}) + "\n"
+
+
+async def _stream_model(model, body, key, transport=None):
+    url = f"{BASE_URL}/{model}:streamGenerateContent?alt=sse"
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+            async with client.stream("POST", url, json=body, headers={"x-goog-api-key": key}) as r:
+                if r.status_code != 200:
+                    raw = (await r.aread()).decode("utf-8", "replace")
+                    try:
+                        detail = json.loads(raw).get("error", {}).get("message", "")
+                    except ValueError:
+                        detail = ""
+                    if r.status_code == 429:
+                        detail = "Gemini rate limit reached. " + detail[:120]
+                    elif r.status_code in (401, 403):
+                        detail = "Gemini key rejected. " + detail[:120]
+                    raise GeminiError(r.status_code, detail or f"Gemini returned {r.status_code}")
+                sent = False
+                async for raw_line in r.aiter_lines():
+                    if not raw_line.startswith("data:"):
+                        continue
+                    try:
+                        chunk = json.loads(raw_line[5:].strip())
+                    except ValueError:
+                        continue
+                    block = (chunk.get("promptFeedback") or {}).get("blockReason")
+                    if block and not sent:
+                        raise GeminiError(422, f"Gemini blocked the prompt ({block}).")
+                    for cand in chunk.get("candidates") or []:
+                        for part in (cand.get("content") or {}).get("parts") or []:
+                            text = part.get("text")
+                            if text and not part.get("thought"):
+                                sent = True
+                                yield _line(text)
+                if not sent:
+                    raise GeminiError(502, "Gemini returned an empty answer.")
+    except httpx.TimeoutException as e:
+        raise GeminiError(504, f"Gemini timed out ({model} took too long to answer).") from e
+    except httpx.ConnectError as e:
+        raise GeminiError(502, f"Could not connect to Gemini API ({type(e).__name__}).") from e
+    except httpx.HTTPError as e:
+        raise GeminiError(502, f"Gemini request failed ({type(e).__name__}).") from e
+
+
+async def stream_chat(messages, options=None, transport=None):
+    key = api_key()
+    if not key:
+        raise GeminiError(503, "No Gemini key set. Add GEMINI_API_KEY to ~/.config/sentinel/.env and restart the backend.")
+    body = to_gemini(messages)
+    if not body["contents"]:
+        raise GeminiError(400, "Nothing to send.")
+    if options and "temperature" in options:
+        try:
+            body["generationConfig"] = {"temperature": max(0.0, min(float(options["temperature"]), 2.0))}
+        except (TypeError, ValueError):
+            pass
+
+    target_model = model_name()
+    try:
+        async for line in _stream_model(target_model, body, key, transport=transport):
+            yield line
+    except GeminiError as e:
+        # If a non-default custom model is set and fails due to high demand (503) or timeout (504),
+        # gracefully fallback to the stable DEFAULT_MODEL before failing.
+        if target_model != DEFAULT_MODEL and e.status in (503, 504) and transport is None:
+            print(f"[Gemini] {target_model} failed ({e.status}: {e.message}), falling back to {DEFAULT_MODEL}...")
+            async for line in _stream_model(DEFAULT_MODEL, body, key, transport=None):
+                yield line
+        else:
+            raise
+
+    yield json.dumps({"done": True}) + "\n"
+
+
+def _error_for(status, raw):
+    try:
+        detail = json.loads(raw).get("error", {}).get("message", "")
+    except ValueError:
+        detail = ""
+    if status == 429:
+        detail = "Gemini rate limit reached. " + detail[:120]
+    elif status in (401, 403):
+        detail = "Gemini key rejected. " + detail[:120]
+    return GeminiError(status, detail or f"Gemini returned {status}")
+
+
+async def _generate_json_single(model, system_text, parts, schema, temperature, transport, key):
+    config = {"temperature": temperature, "responseMimeType": "application/json"}
+    if schema:
+        config["responseSchema"] = schema
+    body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": config}
+    if system_text:
+        body["systemInstruction"] = {"parts": [{"text": system_text}]}
+    url = f"{BASE_URL}/{model}:generateContent"
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+            r = await client.post(url, json=body, headers={"x-goog-api-key": key})
+    except httpx.TimeoutException as e:
+        raise GeminiError(504, f"Gemini timed out ({model} took too long to answer).") from e
+    except httpx.ConnectError as e:
+        raise GeminiError(502, f"Could not connect to Gemini API ({type(e).__name__}).") from e
+    except httpx.HTTPError as e:
+        raise GeminiError(502, f"Gemini request failed ({type(e).__name__}).") from e
+    if r.status_code != 200:
+        raise _error_for(r.status_code, r.text)
+    data = r.json()
+    block = (data.get("promptFeedback") or {}).get("blockReason")
+    if block:
+        raise GeminiError(422, f"Gemini blocked the prompt ({block}).")
+    text = ""
+    for cand in (data.get("candidates") or [])[:1]:
+        for part in (cand.get("content") or {}).get("parts") or []:
+            if part.get("text") and not part.get("thought"):
+                text += part["text"]
+    if not text.strip():
+        raise GeminiError(502, "Gemini returned an empty answer.")
+    return text
+
+
+async def generate_json(system_text, parts, schema=None, temperature=0.2, transport=None, model=None):
+    """One non-streaming Gemini call that returns the model's JSON text. parts are Gemini content parts."""
+    key = api_key()
+    if not key:
+        raise GeminiError(503, "No Gemini key set. Add GEMINI_API_KEY to ~/.config/sentinel/.env and restart the backend.")
+    target_model = model or model_name()
+    try:
+        return await _generate_json_single(target_model, system_text, parts, schema, temperature, transport, key)
+    except GeminiError as e:
+        if target_model != DEFAULT_MODEL and e.status in (503, 504) and transport is None:
+            print(f"[Gemini desktop] {target_model} failed ({e.status}: {e.message}), falling back to {DEFAULT_MODEL}...")
+            return await _generate_json_single(DEFAULT_MODEL, system_text, parts, schema, temperature, None, key)
+        raise

@@ -1,0 +1,13 @@
+[Unit]
+Description=Block Ollama (port 11434) from the LAN; only this machine and Tailscale may reach it
+After=network-pre.target tailscaled.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ollama-lan-block.sh
+ExecStop=/usr/local/sbin/ollama-lan-block.sh remove
+
+[Install]
+WantedBy=multi-user.target
