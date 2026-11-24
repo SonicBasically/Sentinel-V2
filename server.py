@@ -1071,6 +1071,23 @@ def get_notifications():
     r2 = subprocess.run('dunstctl history 2>/dev/null | head -50', shell=True, capture_output=True, text=True, timeout=5)
     return {"notifications": r2.stdout.strip() or "No notifications tracked. Install dunst for active indexing."}
 
+@app.get("/dashboard/notifications", dependencies=[Depends(verify_key)])
+def dashboard_notifications():
+    try:
+        r = subprocess.run(["dunstctl", "history"], capture_output=True, text=True, timeout=5)
+        items = (json.loads(r.stdout or "{}").get("data") or [[]])[0]
+    except Exception:
+        return {"items": []}
+    def _field(item, key):
+        v = item.get(key)
+        return v.get("data", "") if isinstance(v, dict) else ""
+    out = [{"app": _field(it, "appname"), "summary": _field(it, "summary"), "body": _field(it, "body")} for it in items[:15]]
+    return {"items": out}
+
+@app.get("/dashboard/games", dependencies=[Depends(verify_key)])
+def dashboard_games():
+    return {"games": game_lib.recent_games()}
+
 # ── NEW CONTROL LAYER WITH APPLICATION REGISTRY ROUTING ──
 class ActionReq(BaseModel):
     action: str

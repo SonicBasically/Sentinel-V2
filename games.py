@@ -372,8 +372,11 @@ def scan():
                 m = _parse_manifest(f)
                 if not m or m["name"].lower().startswith(JUNK_PREFIXES) or m["name"].lower() in JUNK_NAMES:
                     continue
+                import re as _re
+                _lp = _re.search(r'"LastPlayed"\s+"(\d+)"', open(f, encoding="utf-8", errors="ignore").read())
                 add({"id": "steam:" + m["appid"], "name": m["name"], "source": "steam",
-                     "installed": bool(m["flags"] & 4), "aliases": []})
+                     "installed": bool(m["flags"] & 4), "aliases": [],
+                     "last_played": int(_lp.group(1)) if _lp else 0})
         for s in _shortcuts(root):
             add({"id": "shortcut:%d" % s["appid"], "name": s["name"], "source": "steam-shortcut",
                  "installed": True, "aliases": [], "_art": s["icon"]})
@@ -461,6 +464,65 @@ def _steam_cmd():
     return None
 
 
+import json as _json_r, time as _time_r
+from pathlib import Path as _Path_r
+RECENT_FILE = _Path_r(os.path.expanduser("~/.config/sentinel/recent_games.json"))
+
+def _read_launch_log():
+    try:
+        return _json_r.loads(RECENT_FILE.read_text()) if RECENT_FILE.exists() else {}
+    except Exception:
+        return {}
+
+def _mark_launched(game_id):
+    data = _read_launch_log()
+    data[game_id] = int(_time_r.time())
+    try:
+        RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECENT_FILE.write_text(_json_r.dumps(data))
+    except OSError:
+        pass
+
+def recent_games(limit=12, days=60):
+    """Games played in the last `days` days, most recent first (Steam LastPlayed or a Sentinel launch)."""
+    cutoff = _time_r.time() - days * 86400
+    launched = _read_launch_log()
+    out = []
+    for g in get_library():
+        last = max(int(g.get("last_played") or 0), int(launched.get(g["id"], 0) or 0))
+        if last and last >= cutoff:
+            out.append((last, dict(g, last_played=last)))
+    out.sort(key=lambda t: t[0], reverse=True)
+    return [g for _, g in out[:limit]]
+
+def _desktop_env(env):
+    """Copy the live desktop session's display settings (DISPLAY, XAUTHORITY...) so GUI apps like Steam can open windows."""
+    keys = ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+    try:
+        out = subprocess.run(["systemctl", "--user", "show-environment"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            k, _, v = line.partition("=")
+            if k in keys and v:
+                env[k] = v
+    except Exception:
+        pass
+    env.setdefault("XDG_RUNTIME_DIR", "/run/user/%d" % os.getuid())
+    return env
+
+def _ensure_steam_running(cmd, env):
+    """Steam ignores steam://rungameid links unless the client is running, so start it silently and wait for it."""
+    import time as _time_st
+    def _running(name):
+        return subprocess.run(["pgrep", "-x", name], capture_output=True).returncode == 0
+    if _running("steam"):
+        return
+    subprocess.Popen(cmd + ["-silent"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    deadline = _time_st.time() + 30
+    while _time_st.time() < deadline and not _running("steamwebhelper"):
+        _time_st.sleep(1)
+    _time_st.sleep(3)
+
 def launch(game_id):
     get_library()
     with _lock:
@@ -468,13 +530,14 @@ def launch(game_id):
     if not game:
         return {"ok": False, "error": "Unknown game id: %s" % game_id}
     env = dict(os.environ)
-    env.setdefault("DISPLAY", ":0")
+    env = _desktop_env(env)
     kind, _, ident = game_id.partition(":")
     if kind in ("steam", "shortcut"):
         cmd = _steam_cmd()
         if not cmd:
             return {"ok": False, "error": "Steam was not found on this machine."}
         gid = int(ident) if kind == "steam" else (int(ident) << 32) | 0x02000000
+        _ensure_steam_running(cmd, env)
         argv = cmd + ["steam://rungameid/%d" % gid]
     else:
         argv = game["command"]
@@ -483,5 +546,6 @@ def launch(game_id):
         argv = [os.path.expanduser(argv[0])] + argv[1:]
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    _mark_launched(game_id)
     note = "" if game.get("installed", True) else " (not fully installed, Steam may ask to finish installing)"
     return {"ok": True, "message": "Launching %s%s" % (game["name"], note), "game": game["name"]}
