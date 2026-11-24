@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sentinel V2</string>
+    <string name="accessibility_description">Lets Sentinel open apps you ask for from your PC when your phone is unlocked. It does not read or change anything on screen.</string>
+    <string name="title_activity_main">Sentinel V2</string>
+    <string name="package_name">com.BasicallyStudios.Sentinelv2</string>
+    <string name="custom_url_scheme">com.sentinel.v2</string>
+</resources>

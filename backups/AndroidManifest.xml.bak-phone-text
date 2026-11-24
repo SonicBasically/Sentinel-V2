@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- Opens allowed apps on an unlocked phone. Turned on by the user in Accessibility settings. -->
+        <service
+            android:name=".SentinelAccessibilityService"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Always-on background listener. specialUse has no time limit on Android 15+. -->
+        <service
+            android:name=".SentinelService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps listening for commands sent from the user's PC to the phone" />
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Lets the app see the allowlisted apps on Android 11+ -->
+    <queries>
+        <!-- Android hides other apps unless they are listed here. Keep in step with SentinelPhonePlugin APPS. -->
+        <package android:name="com.samsung.android.dialer" />
+        <package android:name="com.samsung.android.messaging" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.samsung.android.app.contacts" />
+
+        <package android:name="com.google.android.contacts" />
+        <package android:name="com.samsung.android.calendar" />
+        <package android:name="com.sec.android.app.clockpackage" />
+        <package android:name="com.sec.android.app.camera" />
+        <package android:name="com.sec.android.gallery3d" />
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.sec.android.app.popupcalculator" />
+        <package android:name="com.samsung.android.app.notes" />
+        <package android:name="com.samsung.android.app.reminder" />
+        <package android:name="com.sec.android.app.shealth" />
+        <package android:name="com.sec.android.app.music" />
+        <package android:name="com.sec.android.app.voicenote" />
+        <package android:name="com.sec.android.app.samsungapps" />
+        <package android:name="com.samsung.android.voc" />
+        <package android:name="com.samsung.android.app.find" />
+        <package android:name="com.samsung.android.app.tips" />
+        <package android:name="com.samsung.android.themestore" />
+        <package android:name="com.sec.android.easyMover" />
+        <package android:name="com.samsung.knox.securefolder" />
+        <package android:name="com.sec.android.app.myfiles" />
+        <package android:name="com.samsung.android.oneconnect" />
+        <package android:name="com.samsung.android.game.gamehome" />
+        <package android:name="com.samsung.android.goodlock" />
+        <package android:name="com.samsung.android.keyscafe" />
+        <package android:name="com.samsung.android.app.routines" />
+        <package android:name="com.samsung.android.soundassistant" />
+        <package android:name="com.samsung.android.displayassistant" />
+        <package android:name="com.samsung.android.spay" />
+        <package android:name="com.samsung.android.app.galaxyraw" />
+        <package android:name="com.samsung.android.app.sketchbook" />
+        <package android:name="com.samsung.android.app.dressroom" />
+        <package android:name="com.samsung.android.app.goodcatch" />
+        <package android:name="com.samsung.android.app.moments" />
+        <package android:name="com.samsung.android.bixby.agent" />
+        <package android:name="com.samsung.android.tvplus" />
+        <package android:name="com.samsung.vvm" />
+        <package android:name="com.google.android.apps.tachyon" />
+        <package android:name="com.google.android.apps.docs.editors.docs" />
+        <package android:name="com.google.android.apps.docs" />
+        <package android:name="com.google.android.gm" />
+        <package android:name="com.google.android.videos" />
+        <package android:name="com.google.android.apps.fitness" />
+        <package android:name="com.google.android.apps.googleassistant" />
+        <package android:name="com.google.android.apps.translate" />
+        <package android:name="com.google.android.apps.walletnfcrel" />
+        <package android:name="com.google.android.apps.classroom" />
+        <package android:name="com.google.android.apps.authenticator2" />
+        <package android:name="com.google.android.apps.chromecast.app" />
+        <package android:name="com.google.android.apps.adm" />
+        <package android:name="com.google.android.projection.gearhead" />
+        <package android:name="com.google.android.apps.youtube.creator" />
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="com.android.vending" />
+        <package android:name="com.brave.browser" />
+        <package android:name="com.opera.gx" />
+        <package android:name="org.torproject.torbrowser" />
+        <package android:name="com.sec.android.app.sbrowser" />
+        <package android:name="com.duckduckgo.mobile.android" />
+        <package android:name="com.deepl.mobiletranslator" />
+        <package android:name="com.duolingo" />
+        <package android:name="com.openai.chatgpt" />
+        <package android:name="com.openai.sora" />
+        <package android:name="com.anthropic.claude" />
+        <package android:name="ai.x.grok" />
+        <package android:name="ai.polycam" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.discord" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.facebook.orca" />
+        <package android:name="com.facebook.pages.app" />
+        <package android:name="com.whatsapp" />
+        <package android:name="org.telegram.messenger" />
+        <package android:name="com.snapchat.android" />
+        <package android:name="com.pinterest" />
+        <package android:name="com.reddit.frontpage" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.disney.disneyplus" />
+        <package android:name="com.crunchyroll.crunchyroid" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="tv.twitch.android.app" />
+        <package android:name="com.roku.remote" />
+        <package android:name="com.amazon.mShop.android.shopping" />
+        <package android:name="com.amazon.dee.app" />
+        <package android:name="com.einnovation.temu" />
+        <package android:name="com.etsy.android" />
+        <package android:name="com.walmart.android" />
+        <package android:name="com.bestbuy.android" />
+        <package android:name="com.dollargeneral.android" />
+        <package android:name="com.mcdonalds.app" />
+        <package android:name="com.olo.dairyqueen.production" />
+        <package android:name="com.dennys.mobile" />
+        <package android:name="com.squareup.cash" />
+        <package android:name="com.paypal.android.p2pmobile" />
+        <package android:name="com.microsoft.office.outlook" />
+        <package android:name="com.microsoft.office.officehubrow" />
+        <package android:name="com.microsoft.skydrive" />
+        <package android:name="com.microsoft.xboxone.smartglass" />
+        <package android:name="com.tailscale.ipn" />
+        <package android:name="com.nextcloud.client" />
+        <package android:name="at.bitfire.davdroid" />
+        <package android:name="org.kde.kdeconnect_tp" />
+        <package android:name="com.joaomgcd.join" />
+        <package android:name="com.truecaller" />
+        <package android:name="org.zwanoo.android.speedtest" />
+        <package android:name="org.malwarebytes.antimalware" />
+        <package android:name="com.life360.android.safetymapd" />
+        <package android:name="works.jubilee.timetree" />
+        <package android:name="com.bandlab.bandlab" />
+        <package android:name="com.bandlab.audiostretch" />
+        <package android:name="in.krosbits.musicolet" />
+        <package android:name="com.maxmpz.audioplayer" />
+        <package android:name="dev.netlob.spotistats" />
+        <package android:name="net.zedge.android" />
+        <package android:name="net.frameo.app" />
+        <package android:name="com.nianticlabs.pokemongo" />
+        <package android:name="com.roblox.client" />
+        <package android:name="com.paradyme.solarsmash" />
+        <package android:name="com.sega.sonic1px" />
+        <package android:name="com.sega.sonic2.runner" />
+        <package android:name="org.dashnet.cookieclicker" />
+        <package android:name="com.digidust.elokence.akinator.freemium" />
+        <package android:name="com.valvesoftware.android.steam.community" />
+        <package android:name="com.stickman.warriors.stickwarriors.dragon.shadow.fight" />
+        <package android:name="air.com.lunime.gachaclub" />
+        <package android:name="com.tuya.smartlife" />
+        <package android:name="com.sengled.life2" />
+        <package android:name="com.sharkninja.shark" />
+        <package android:name="com.hp.printercontrol" />
+        <package android:name="com.arcade1up.companionappandroid" />
+        <package android:name="com.aws.android" />
+        <package android:name="com.bidfta.mobile" />
+        <package android:name="com.infinitecampus.student.campusportalhybrid" />
+        <package android:name="com.schoology.app" />
+        <package android:name="com.apptegy.hardincs" />
+        <package android:name="com.tylertech.myridek12" />
+        <package android:name="com.skyward.mobileaccess" />
+        <package android:name="com.fetchrewards.fetchrewards.hop" />
+        <package android:name="com.encore.candleapp" />
+        <package android:name="com.h43.dentalmonitoring" />
+        <package android:name="com.dudynets.lovecounter" />
+        <package android:name="com.th.daybetter" />
+        <package android:name="ginlemon.flowerfree" />
+        <package android:name="ginlemon.iconpackstudio" />
+        <package android:name="org.kustom.widget" />
+        <package android:name="me.piebridge.brevent" />
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="com.zacharee1.systemuituner" />
+        <package android:name="com.truedevelopersstudio.automatictap.autoclicker" />
+        <package android:name="com.digibites.accubattery" />
+        <package android:name="com.cxinventor.file.explorer" />
+        <package android:name="mp3videoconverter.videotomp3.videotomp3converter" />
+        <package android:name="com.mp3converter.videoconverter.videotomp3.videotoaudio" />
+        <package android:name="com.htetznaing.zfile" />
+        <package android:name="com.htetznaing.zfont2" />
+        <package android:name="ph.spacedesk.beta" />
+        <package android:name="om.sstvencoder" />
+        <package android:name="xdsopl.robot36" />
+        <package android:name="com.lailaixiong.funnyprint" />
+        <package android:name="com.simejikeyboard" />
+        <package android:name="com.camtoplan.measure" />
+        <package android:name="com.codium.bmicalculator" />
+        <package android:name="crumbl.cookies" />
+        <package android:name="com.widgetable.theme.android" />
+        <package android:name="wl.smartled.duoco.rgb" />
+        <package android:name="wl.smartled.rgb" />
+        <package android:name="com.crrepa.band.hero" />
+        <package android:name="com.lianhezhuli.olywear" />
+        <package android:name="com.webtoapp" />
+        <package android:name="com.w2a.i751" />
+        <package android:name="com.w2a.xd0a" />
+        <package android:name="com.xiaozhen.beauty.hnd" />
+        <package android:name="com.blackiconpack.zwart" />
+        <package android:name="com.akbon.ios" />
+        <package android:name="com.aistudio.tonereply.wxkqpz" />
+        <package android:name="com.armmc.app" />
+    </queries>
+
+</manifest>

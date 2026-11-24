@@ -1,0 +1,9 @@
+{
+  "appId": "com.sentinel.v2",
+  "appName": "Sentinel V2",
+  "webDir": "public",
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http"
+  }
+}

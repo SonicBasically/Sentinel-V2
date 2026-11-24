@@ -1,0 +1,27 @@
+{
+  "name": "sentinel-v2",
+  "version": "1.0.0",
+  "description": "A locally-hosted, Jarvis-style AI assistant for a Linux desktop. A local LLM (via Ollama) does the thinking; a small FastAPI backend lets it control the computer; a single-page UI (also wrapped in Electron) is how you talk to it. Everything runs on your own machine.",
+  "main": "sw.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SonicBasically/Sentinel-V2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SonicBasically/Sentinel-V2/issues"
+  },
+  "homepage": "https://github.com/SonicBasically/Sentinel-V2#readme",
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor-community/text-to-speech": "^8.0.2",
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0"
+  }
+}

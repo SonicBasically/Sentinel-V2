@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel V2</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #080808; color: #d8d8d8;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wrap { text-align: center; max-width: 520px; padding: 24px; width: 100%; box-sizing: border-box; }
+  .orb {
+    width: 64px; height: 64px; margin: 0 auto 22px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #7b5cff, #2a1a5c 70%);
+    box-shadow: 0 0 28px rgba(123, 92, 255, .45);
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; letter-spacing: .02em; }
+  p { font-size: 14px; line-height: 1.5; color: #a8a8a8; margin: 6px 0; }
+  code {
+    display: inline-block; margin-top: 8px; padding: 6px 10px; border-radius: 6px;
+    background: #141414; border: 1px solid #262626; color: #cfcfcf; font-size: 13px;
+    user-select: text;
+  }
+  button {
+    margin-top: 18px; padding: 10px 18px; border-radius: 8px; border: 1px solid #3a3a3a;
+    background: #161616; color: #e6e6e6; font-size: 14px; cursor: pointer;
+  }
+  button:focus-visible, input:focus-visible { outline: 2px solid #7b5cff; outline-offset: 2px; }
+  label { display: block; text-align: left; font-size: 13px; color: #a8a8a8; margin: 18px 0 6px; }
+  input[type="password"] {
+    width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid #2c2c2c; background: #101010; color: #e6e6e6; font-size: 14px;
+  }
+  .err { color: #ff8a8a; min-height: 1.4em; font-size: 13px; margin-top: 8px; }
+  #connecting, #setup, #offline { display: none; }
+  #connecting.on, #setup.on, #offline.on { display: block; }
+  @keyframes pulse { 0%, 100% { opacity: .55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.06); } }
+  @media (prefers-reduced-motion: reduce) { .orb { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="orb" aria-hidden="true"></div>
+
+  <div id="setup">
+    <h1>Welcome to Sentinel</h1>
+    <p>Paste your Sentinel API key to finish setup. It is saved only on this computer, in <code>~/.config/sentinel/.env</code>.</p>
+    <form id="setupForm" autocomplete="off">
+      <label for="keyInput">API key</label>
+      <input id="keyInput" type="password" spellcheck="false" autocomplete="off" required>
+      <div class="err" id="setupErr" role="alert"></div>
+      <button id="saveKey" type="submit">Save and start</button>
+    </form>
+  </div>
+
+  <div id="connecting" class="on">
+    <h1>Connecting to Sentinel…</h1>
+    <p id="status">Starting the backend service.</p>
+  </div>
+
+  <div id="offline" role="alert">
+    <h1>Sentinel's backend is offline</h1>
+    <p>The window will connect as soon as it is back. To start it now, run this in a terminal:</p>
+    <code>systemctl --user restart sentinel-backend sentinel-ui</code>
+    <p id="reason"></p>
+    <button id="retry" type="button">Try again</button>
+  </div>
+</div>
+<script>
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var target = params.get('target');
+    var backend = params.get('backend');
+    var started = Date.now();
+    var offlineAfterMs = 20000;
+    var api = window.sentinelEnv || {};
+
+    function show(id) {
+      ['setup', 'connecting', 'offline'].forEach(function (x) {
+        document.getElementById(x).classList.toggle('on', x === id);
+      });
+    }
+
+    function probe() {
+      // no-cors: any answer from the server counts as "up"; the body is not read.
+      fetch(backend, { mode: 'no-cors', cache: 'no-store' })
+        .then(function () { location.replace(target); })
+        .catch(function (err) {
+          if (Date.now() - started > offlineAfterMs) {
+            document.getElementById('reason').textContent = String(err && err.message || '');
+            show('offline');
+          }
+          setTimeout(probe, 1000);
+        });
+    }
+
+    // First run: no key saved yet. Ask for one before anything else.
+    var needsSetup = typeof api.hasKey === 'function' && !api.hasKey();
+    if (needsSetup) {
+      show('setup');
+      document.getElementById('keyInput').focus();
+    } else {
+      probe();
+    }
+
+    document.getElementById('setupForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = document.getElementById('saveKey');
+      var errEl = document.getElementById('setupErr');
+      errEl.textContent = '';
+      btn.disabled = true;
+      api.saveKey(document.getElementById('keyInput').value).then(function (res) {
+        if (!res || !res.ok) {
+          errEl.textContent = (res && res.error) || 'Could not save the key.';
+          btn.disabled = false;
+          return;
+        }
+        document.getElementById('keyInput').value = '';
+        started = Date.now();
+        show('connecting');
+        probe();
+      }).catch(function () {
+        errEl.textContent = 'Could not save the key.';
+        btn.disabled = false;
+      });
+    });
+
+    document.getElementById('retry').addEventListener('click', function () {
+      started = Date.now();
+      show('connecting');
+      probe();
+    });
+  })();
+</script>
+</body>
+</html>

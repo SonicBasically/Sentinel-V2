@@ -1,0 +1,10 @@
+{
+  "appId": "com.sentinel.v2",
+  "appName": "Sentinel V2",
+  "webDir": "public",
+  "server": {
+    "url": "http://100.91.201.91:8766/sentinel_v2.html",
+    "cleartext": true
+  }
+}
+

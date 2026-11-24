@@ -1,0 +1,24 @@
+{
+  "name": "Sentinel V2",
+  "short_name": "Sentinel",
+  "description": "Jarvis-style AI Assistant powered by Ollama",
+  "start_url": "/sentinel_v2.html",
+  "display": "standalone",
+  "background_color": "#080808",
+  "theme_color": "#080808",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

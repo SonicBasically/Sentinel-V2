@@ -1,0 +1,21 @@
+[Unit]
+Description=Sentinel V2 backend (FastAPI, port 8765 on localhost and Tailscale)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/OG_Drive/GitHub/Sentinel-V2
+# server.py binds the Tailscale address only once, at startup. Wait (up to 2 minutes)
+# for Tailscale to have an IPv4 address so the phone can reach the backend after boot.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 0'
+ExecStart=%h/Desktop/OG_Drive/GitHub/Sentinel-V2/.venv/bin/python server.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

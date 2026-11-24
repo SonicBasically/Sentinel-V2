@@ -1,0 +1,537 @@
+"""Sentinel game library: Steam (installed + non-Steam shortcuts) and custom launchers.
+
+Games are launched by library ID only; nothing here runs free-form commands.
+Custom launchers live in custom_games.json (edit it by hand, it is never written by the API).
+"""
+import os, re, json, glob, shutil, struct, subprocess, threading, time, difflib
+import urllib.request, urllib.parse
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CUSTOM_FILE = HERE / "custom_games.json"
+POLL_SECONDS = 10
+
+STEAM_ROOTS = [
+    "~/.steam/debian-installation",
+    "~/.local/share/Steam",
+    "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+]
+# Steam tools that have appmanifests but are not games
+JUNK_PREFIXES = ("proton", "steam linux runtime", "steamworks common redistributables", "steam linux")
+JUNK_NAMES = {"spacewar"}
+STOPWORDS = {"the", "a", "an", "game", "please", "for", "me", "up", "my", "on", "steam", "can", "you", "to"}
+
+_lock = threading.RLock()
+_library = []
+_signature = None
+_last_scan = 0.0
+_watcher_started = False
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+def _steam_roots():
+    seen, out = set(), []
+    for r in STEAM_ROOTS:
+        p = Path(os.path.expanduser(r))
+        if (p / "steamapps").is_dir():
+            real = str(p.resolve())
+            if real not in seen:
+                seen.add(real)
+                out.append(p.resolve())
+    return out
+
+
+def _library_dirs(root):
+    """All steamapps folders for one Steam root (default + extra drives)."""
+    dirs = [root / "steamapps"]
+    for vdf in (root / "steamapps" / "libraryfolders.vdf", root / "config" / "libraryfolders.vdf"):
+        try:
+            text = vdf.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r'"path"\s+"([^"]+)"', text):
+            p = Path(m.group(1).replace("\\\\", "\\")) / "steamapps"
+            if p.is_dir() and p not in dirs:
+                dirs.append(p)
+    return dirs
+
+
+def _parse_manifest(path):
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return None
+    def grab(key):
+        m = re.search(r'"%s"\s+"([^"]*)"' % key, text)
+        return m.group(1) if m else None
+    appid, name, flags = grab("appid"), grab("name"), grab("StateFlags")
+    if not appid or not name:
+        return None
+    return {"appid": appid, "name": name, "flags": int(flags or 0)}
+
+
+def _parse_binary_vdf(data):
+    pos = 0
+    def read_str():
+        nonlocal pos
+        end = data.index(b"\x00", pos)
+        s = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        return s
+    def read_obj():
+        nonlocal pos
+        obj = {}
+        while pos < len(data):
+            t = data[pos]; pos += 1
+            if t == 8:
+                return obj
+            key = read_str()
+            if t == 0:
+                obj[key.lower()] = read_obj()
+            elif t == 1:
+                obj[key.lower()] = read_str()
+            elif t == 2:
+                obj[key.lower()] = struct.unpack_from("<I", data, pos)[0]; pos += 4
+            else:
+                raise ValueError("bad vdf type %d" % t)
+        return obj
+    return read_obj()
+
+
+def _shortcuts(root):
+    out = []
+    for f in glob.glob(str(root / "userdata" / "*" / "config" / "shortcuts.vdf")):
+        try:
+            tree = _parse_binary_vdf(Path(f).read_bytes())
+        except Exception:
+            continue
+        for entry in (tree.get("shortcuts") or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            name, appid = entry.get("appname"), entry.get("appid")
+            if name and isinstance(appid, int):
+                out.append({"appid": appid, "name": name, "icon": entry.get("icon") or ""})
+    return out
+
+
+def _load_custom():
+    try:
+        items = json.loads(CUSTOM_FILE.read_text())
+    except (OSError, ValueError):
+        return []
+    return [i for i in items if isinstance(i, dict) and i.get("id") and i.get("name") and isinstance(i.get("command"), list)]
+
+
+def _norm(s):
+    words = re.sub(r"[^a-z0-9]+", " ", s.lower()).split()
+    return " ".join(w for w in words if w not in STOPWORDS)
+
+
+def _pub(g):
+    out = {k: v for k, v in g.items() if k not in ("command", "_art")}
+    found = find_art(g["id"])
+    out["art"] = found[1] if found else None
+    return out
+
+
+# ── art ──────────────────────────────────────────────────────────────
+_IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".svg")
+
+
+def _theme_icon(name):
+    """Largest hicolor/pixmaps icon for an icon name (png preferred, svg as fallback)."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        return None
+    def size(p):
+        m = re.search(r"/(\d+)x\d+/", p)
+        return int(m.group(1)) if m else 0
+    pngs = sorted(glob.glob("/usr/share/icons/hicolor/*/apps/%s.png" % name), key=size)
+    if pngs:
+        return Path(pngs[-1])
+    for pat in ("/usr/share/icons/hicolor/*/apps/%s.svg" % name, "/usr/share/pixmaps/%s.png" % name,
+                "/usr/share/pixmaps/%s.svg" % name):
+        hits = glob.glob(pat)
+        if hits:
+            return Path(hits[0])
+    return None
+
+
+def find_art(game_id):
+    """Return (path, kind) for a library id, or None. kind: wide | portrait | icon."""
+    kind, _, ident = game_id.partition(":")
+    if kind in ("steam", "shortcut"):
+        if not ident.isdigit():
+            return None
+        for root in _steam_roots():
+            if kind == "steam":
+                d = root / "appcache" / "librarycache" / ident
+                if not d.is_dir():
+                    continue
+                for name, k in (("library_header.jpg", "wide"), ("header.jpg", "wide"), ("library_hero.jpg", "wide"),
+                                ("library_600x900.jpg", "portrait"), ("library_capsule.jpg", "portrait")):
+                    hits = sorted(d.glob(name)) or sorted(d.glob("*/" + name))
+                    if hits:
+                        return hits[0], k
+            else:
+                for grid in glob.glob(str(root / "userdata" / "*" / "config" / "grid")):
+                    for stem, k in ((ident + "_hero", "wide"), (ident, "wide"), (ident + "p", "portrait")):
+                        for ext in _IMG_EXT:
+                            f = Path(grid) / (stem + ext)
+                            if f.is_file():
+                                return f, k
+    with _lock:
+        game = next((g for g in _library if g["id"] == game_id), None)
+    hint = (game or {}).get("_art") or ""
+    if hint:
+        p = Path(os.path.expanduser(hint))
+        if not p.is_absolute():
+            p = HERE / p
+        if p.is_file() and p.suffix.lower() in _IMG_EXT:
+            return p, "icon"
+        icon = _theme_icon(hint)
+        if icon:
+            return icon, "icon"
+    return _cached_art(game_id)
+
+
+# ── SteamGridDB art (only for games that have no art of their own) ───
+# Needs STEAMGRIDDB_API_KEY (env var or ~/.config/sentinel/.env). Without it this is a no-op.
+# Downloaded images are cached in art_cache/ as <id>.<kind>.<ext>; misses are remembered for a week.
+ART_CACHE = HERE / "art_cache"
+MISS_FILE = ART_CACHE / "_misses.json"
+SGDB_BASE = "https://www.steamgriddb.com/api/v2"
+SGDB_RETRY_SECONDS = 7 * 86400
+SGDB_MAX_BYTES = 6 * 1024 * 1024
+_sgdb_running = False
+
+
+def _sgdb_key():
+    key = os.environ.get("STEAMGRIDDB_API_KEY")
+    if key:
+        return key.strip()
+    cfg = Path.home() / ".config" / "sentinel" / ".env"
+    try:
+        for line in cfg.read_text().splitlines():
+            if line.startswith("STEAMGRIDDB_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"\'')
+    except OSError:
+        pass
+    return None
+
+
+def _safe_id(game_id):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", game_id)
+
+
+def _cached_art(game_id):
+    if not ART_CACHE.is_dir():
+        return None
+    for f in sorted(ART_CACHE.glob(_safe_id(game_id) + ".*")):
+        parts = f.name.rsplit(".", 2)
+        if len(parts) == 3 and parts[2].lower() in tuple(e[1:] for e in _IMG_EXT) and parts[1] in ("wide", "portrait"):
+            return f, parts[1]
+    return None
+
+
+def _load_misses():
+    try:
+        return json.loads(MISS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_misses(m):
+    try:
+        ART_CACHE.mkdir(exist_ok=True)
+        MISS_FILE.write_text(json.dumps(m))
+    except OSError:
+        pass
+
+
+def _sgdb_request(url, key):
+    return urllib.request.Request(url, headers={"Authorization": "Bearer " + key, "User-Agent": "Sentinel-V2"})
+
+
+def _trusted_art_url(url):
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return (parsed.scheme == "https" and (host == "steamgriddb.com" or host.endswith(".steamgriddb.com"))
+            and not parsed.username and not parsed.password and not parsed.port)
+
+
+class _SteamGridDBRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _trusted_art_url(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _sgdb_get(path, key, params=None):
+    url = SGDB_BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    opener = urllib.request.build_opener(_SteamGridDBRedirects())
+    with opener.open(_sgdb_request(url, key), timeout=15) as r:
+        j = json.loads(r.read().decode("utf-8", "replace"))
+    return j.get("data") if j.get("success") else None
+
+
+def _sgdb_fetch(game, key):
+    """Try to download art for one game. True = saved, False = no match. Network errors raise."""
+    q = _norm(game["name"])
+    results = _sgdb_get("/search/autocomplete/" + urllib.parse.quote(game["name"], safe=""), key) or []
+    scored = sorted(((difflib.SequenceMatcher(None, q, _norm(r.get("name", ""))).ratio(), r) for r in results[:6]),
+                    key=lambda x: -x[0])
+    if not scored or scored[0][0] < 0.6:
+        return False
+    cutoff = max(0.6, scored[0][0] - 0.05)
+    for score, cand in [x for x in scored if x[0] >= cutoff][:3]:  # same-name entries: first one may have no art
+        gid = cand["id"]
+        for dims, kind in (("460x215,920x430", "wide"), ("600x900", "portrait")):
+            grids = _sgdb_get("/grids/game/%d" % gid, key, {"dimensions": dims, "types": "static", "nsfw": "false",
+                                                            "humor": "false", "mimes": "image/png,image/jpeg,image/webp"})
+            for g in grids or []:
+                url = g.get("url") or ""
+                parsed = urllib.parse.urlparse(url)
+                ext = Path(parsed.path).suffix.lower()
+                if not _trusted_art_url(url) or ext not in (".png", ".jpg", ".jpeg", ".webp"):
+                    continue
+                opener = urllib.request.build_opener(_SteamGridDBRedirects())
+                with opener.open(urllib.request.Request(url, headers={"User-Agent": "Sentinel-V2"}), timeout=20) as r:
+                    data = r.read(SGDB_MAX_BYTES + 1)
+                if not data or len(data) > SGDB_MAX_BYTES:
+                    continue
+                ART_CACHE.mkdir(exist_ok=True)
+                tmp = ART_CACHE / (_safe_id(game["id"]) + ".part")
+                tmp.write_bytes(data)
+                tmp.replace(ART_CACHE / ("%s.%s%s" % (_safe_id(game["id"]), kind, ext)))
+                return True
+    return False
+
+
+def _sgdb_worker():
+    global _sgdb_running
+    try:
+        key = _sgdb_key()
+        if not key:
+            return
+        misses = _load_misses()
+        now = time.time()
+        with _lock:
+            todo = [dict(g) for g in _library]
+        todo = [g for g in todo if find_art(g["id"]) is None and now - misses.get(g["id"] + "|" + g["name"], 0) > SGDB_RETRY_SECONDS]
+        for g in todo:
+            try:
+                ok = _sgdb_fetch(g, key)
+            except Exception:
+                break  # network/auth problem: stop quietly, try again on the next restart
+            if not ok:
+                misses[g["id"] + "|" + g["name"]] = time.time()  # keyed by name too, so a rename retries
+                _save_misses(misses)
+            time.sleep(0.5)
+    finally:
+        _sgdb_running = False
+
+
+def _kick_sgdb():
+    global _sgdb_running
+    with _lock:
+        if _sgdb_running or not _sgdb_key():
+            return
+        _sgdb_running = True
+    threading.Thread(target=_sgdb_worker, daemon=True).start()
+
+
+# ── scanning ─────────────────────────────────────────────────────────
+def _compute_signature():
+    sig = []
+    for root in _steam_roots():
+        for d in _library_dirs(root):
+            for f in glob.glob(str(d / "appmanifest_*.acf")):
+                try: sig.append((f, os.stat(f).st_mtime))
+                except OSError: pass
+        for f in glob.glob(str(root / "userdata" / "*" / "config" / "shortcuts.vdf")) + [str(root / "steamapps" / "libraryfolders.vdf")]:
+            try: sig.append((f, os.stat(f).st_mtime))
+            except OSError: pass
+    try: sig.append((str(CUSTOM_FILE), CUSTOM_FILE.stat().st_mtime))
+    except OSError: pass
+    return tuple(sorted(sig))
+
+
+def scan():
+    games, seen = [], set()
+    def add(g):
+        key = _norm(g["name"])
+        if key and key not in seen:
+            seen.add(key); games.append(g)
+    for c in _load_custom():
+        add({"id": "custom:" + str(c["id"]), "name": c["name"], "source": "custom", "installed": True,
+             "aliases": [str(a) for a in c.get("aliases", [])], "command": [str(x) for x in c["command"]],
+             "_art": str(c.get("image") or c.get("icon") or c["command"][0])})
+    for root in _steam_roots():
+        for d in _library_dirs(root):
+            for f in sorted(glob.glob(str(d / "appmanifest_*.acf"))):
+                m = _parse_manifest(f)
+                if not m or m["name"].lower().startswith(JUNK_PREFIXES) or m["name"].lower() in JUNK_NAMES:
+                    continue
+                import re as _re
+                _lp = _re.search(r'"LastPlayed"\s+"(\d+)"', open(f, encoding="utf-8", errors="ignore").read())
+                add({"id": "steam:" + m["appid"], "name": m["name"], "source": "steam",
+                     "installed": bool(m["flags"] & 4), "aliases": [],
+                     "last_played": int(_lp.group(1)) if _lp else 0})
+        for s in _shortcuts(root):
+            add({"id": "shortcut:%d" % s["appid"], "name": s["name"], "source": "steam-shortcut",
+                 "installed": True, "aliases": [], "_art": s["icon"]})
+    games.sort(key=lambda g: g["name"].lower())
+    return games
+
+
+def refresh(force=False):
+    global _library, _signature, _last_scan
+    sig = _compute_signature()
+    changed = False
+    with _lock:
+        if force or sig != _signature:
+            _library = scan()
+            _signature = sig
+            _last_scan = time.time()
+            changed = True
+    if changed:
+        _kick_sgdb()
+
+
+def _watch():
+    while True:
+        time.sleep(POLL_SECONDS)
+        try: refresh()
+        except Exception: pass
+
+
+def get_library():
+    global _watcher_started
+    if not _watcher_started:
+        _watcher_started = True
+        refresh(force=True)
+        threading.Thread(target=_watch, daemon=True).start()
+    with _lock:
+        return [_pub(g) for g in _library]
+
+
+def last_scan():
+    return _last_scan
+
+
+# ── matching ─────────────────────────────────────────────────────────
+def _score(q, g):
+    best = 0.0
+    for label in [g["name"]] + g.get("aliases", []):
+        n = _norm(label)
+        if not n:
+            continue
+        if q == n:
+            return 1.0
+        if len(q) >= 3 and set(q.split()) <= set(n.split()):
+            best = max(best, 0.92)
+        elif len(q) >= 3 and (q in n or n in q) and len(n) >= 3:
+            best = max(best, 0.88)
+        else:
+            best = max(best, difflib.SequenceMatcher(None, q, n).ratio())
+    return best
+
+
+def resolve(query):
+    get_library()
+    q = _norm(query)
+    if not q:
+        return {"best": None, "candidates": []}
+    with _lock:
+        scored = sorted(((_score(q, g), g) for g in _library), key=lambda x: -x[0])
+    pub = _pub
+    cands = [dict(pub(g), score=round(s, 2)) for s, g in scored[:5] if s >= 0.5]
+    best = None
+    if scored and scored[0][0] >= 0.85:
+        lead_ok = scored[0][0] == 1.0 or len(scored) < 2 or scored[0][0] - scored[1][0] >= 0.08
+        if lead_ok:
+            best = pub(scored[0][1])
+    return {"best": best, "candidates": cands}
+
+
+# ── launching ────────────────────────────────────────────────────────
+def _steam_cmd():
+    exe = shutil.which("steam") or ("/usr/games/steam" if os.path.exists("/usr/games/steam") else None)
+    if exe:
+        return [exe]
+    if shutil.which("flatpak"):
+        return ["flatpak", "run", "com.valvesoftware.Steam"]
+    return None
+
+
+import json as _json_r, time as _time_r
+from pathlib import Path as _Path_r
+RECENT_FILE = _Path_r(os.path.expanduser("~/.config/sentinel/recent_games.json"))
+
+def _read_launch_log():
+    try:
+        return _json_r.loads(RECENT_FILE.read_text()) if RECENT_FILE.exists() else {}
+    except Exception:
+        return {}
+
+def _mark_launched(game_id):
+    data = _read_launch_log()
+    data[game_id] = int(_time_r.time())
+    try:
+        RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECENT_FILE.write_text(_json_r.dumps(data))
+    except OSError:
+        pass
+
+def recent_games(limit=12, days=60):
+    """Games played in the last `days` days, most recent first (Steam LastPlayed or a Sentinel launch)."""
+    cutoff = _time_r.time() - days * 86400
+    launched = _read_launch_log()
+    out = []
+    for g in get_library():
+        last = max(int(g.get("last_played") or 0), int(launched.get(g["id"], 0) or 0))
+        if last and last >= cutoff:
+            out.append((last, dict(g, last_played=last)))
+    out.sort(key=lambda t: t[0], reverse=True)
+    return [g for _, g in out[:limit]]
+
+def _ensure_steam_running(cmd, env):
+    """Steam ignores steam://rungameid links unless the client is running, so start it silently and wait for it."""
+    import time as _time_st
+    def _running(name):
+        return subprocess.run(["pgrep", "-x", name], capture_output=True).returncode == 0
+    if _running("steam"):
+        return
+    subprocess.Popen(cmd + ["-silent"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    deadline = _time_st.time() + 30
+    while _time_st.time() < deadline and not _running("steamwebhelper"):
+        _time_st.sleep(1)
+    _time_st.sleep(3)
+
+def launch(game_id):
+    get_library()
+    with _lock:
+        game = next((g for g in _library if g["id"] == game_id), None)
+    if not game:
+        return {"ok": False, "error": "Unknown game id: %s" % game_id}
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")
+    kind, _, ident = game_id.partition(":")
+    if kind in ("steam", "shortcut"):
+        cmd = _steam_cmd()
+        if not cmd:
+            return {"ok": False, "error": "Steam was not found on this machine."}
+        gid = int(ident) if kind == "steam" else (int(ident) << 32) | 0x02000000
+        _ensure_steam_running(cmd, env)
+        argv = cmd + ["steam://rungameid/%d" % gid]
+    else:
+        argv = game["command"]
+        if not shutil.which(argv[0]) and not os.path.exists(os.path.expanduser(argv[0])):
+            return {"ok": False, "error": "Launcher not found: %s" % argv[0]}
+        argv = [os.path.expanduser(argv[0])] + argv[1:]
+    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    _mark_launched(game_id)
+    note = "" if game.get("installed", True) else " (not fully installed, Steam may ask to finish installing)"
+    return {"ok": True, "message": "Launching %s%s" % (game["name"], note), "game": game["name"]}

@@ -1,0 +1,149 @@
+"""Chat with Sentinel from Slack.
+
+Listens over Socket Mode for direct messages and @mentions. Only SENTINEL_SLACK_OWNER_ID is answered.
+Replies come from the local model, in the voice of whichever personality is active in the Sentinel
+window (the UI tells the server through set_persona). Chat only: a Slack message never runs a command.
+Needs SENTINEL_SLACK_TOKEN, SENTINEL_SLACK_APP_TOKEN (xapp-...) and SENTINEL_SLACK_OWNER_ID.
+"""
+import re
+import threading
+from pathlib import Path
+
+import httpx
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
+
+import slack_send
+
+OLLAMA_CHAT = "http://127.0.0.1:11434/api/chat"
+PERSONALITIES_DIR = Path(__file__).resolve().parent / "personalities"
+PERSONA_NAMES = {"sentinel": "Sentinel", "sayori": "Sayori", "monika": "Monika", "natsuki": "Natsuki",
+                 "subaru": "Subaru Natsuki", "beatrice": "Beatrice", "reinhard": "Reinhard",
+                 "regulus": "Regulus Corneas", "emilia": "Emilia", "rem": "Rem", "ram": "Ram",
+                 "echidna": "Echidna", "shaula": "Shaula", "roxy": "Roxy", "rudeus": "Rudeus",
+                 "sylphiette": "Sylphiette", "saiki": "Kusuo Saiki", "thomas": "Me"}
+HISTORY_TURNS = 10  # exchanges kept for context, in memory only
+MAX_PERSONA_CHARS = 4000
+
+BASE = (
+    "You are Sentinel V2, talking with your owner over Slack. Chat the way a person texts: short, natural, "
+    "and in the voice of the active personality below. Don't repeat introductions, don't use stock lines "
+    "like 'how can I assist you today' or 'let me know if you need anything', and don't end every reply "
+    "with an offer or question. You cannot run commands, open apps or control the computer from Slack. "
+    "If they ask you to do any of that, reply with exactly: I can only chat from Slack. Use the Sentinel "
+    "window to open apps."
+)
+
+_GREETING = re.compile(r"^\s*(hey there|hello there|hey|hi|hello)\b[^.!?\n]*[.!?]\s*", re.IGNORECASE)
+
+
+def _strip_repeat_greeting(answer):
+    """Only the first reply in a conversation may greet. Later greetings are cut in code."""
+    if not any(m["role"] == "assistant" for m in _history):
+        return answer
+    stripped = _GREETING.sub("", answer, count=1).strip()
+    return stripped or answer
+
+PERSONA_FILE = Path.home() / ".config" / "sentinel" / "persona.txt"
+
+
+def _load_persona():
+    try:
+        name = PERSONA_FILE.read_text().strip().lower()
+        return name if name in PERSONA_NAMES else "sentinel"
+    except OSError:
+        return "sentinel"
+
+
+_persona = _load_persona()
+_history = []
+_lock = threading.Lock()
+_handler = None
+
+
+def set_persona(name):
+    """Called by the server whenever the personality changes in the Sentinel window."""
+    global _persona
+    key = (name or "").lower()
+    if key not in PERSONA_NAMES or key == _persona:
+        return
+    with _lock:
+        _persona = key
+        _history.clear()  # same as the chat window: a new voice starts a fresh conversation
+        try:
+            PERSONA_FILE.parent.mkdir(parents=True, exist_ok=True)
+            PERSONA_FILE.write_text(key)
+        except OSError:
+            pass
+
+
+def _system_prompt():
+    doc = ""
+    try:
+        doc = (PERSONALITIES_DIR / (_persona + ".md")).read_text(encoding="utf-8")[:MAX_PERSONA_CHARS]
+    except OSError:
+        pass
+    name = PERSONA_NAMES.get(_persona, "Sentinel").upper()
+    return BASE + "\n\n=== ACTIVE PERSONALITY: " + name + " ===\n" + doc
+
+
+def _ask(text):
+    msgs = [{"role": "system", "content": _system_prompt()}] + _history[-HISTORY_TURNS * 2:]
+    msgs.append({"role": "user", "content": text})
+    try:
+        r = httpx.post(OLLAMA_CHAT, json={"model": slack_send.SLACK_MODEL, "messages": msgs,
+                                          "stream": False, "options": {"temperature": 0.8}}, timeout=120)
+        answer = ((r.json().get("message") or {}).get("content") or "").strip()
+    except Exception as e:
+        print("[Slack chat] model error:", e)
+        return "I couldn't reach my model just now."
+    return answer or "Hm, I'm not sure what to say to that."
+
+
+def _handle(event, client):
+    owner = slack_send._env_value("SENTINEL_SLACK_OWNER_ID")
+    if not owner or event.get("user") != owner:
+        return
+    text = re.sub(r"<@[A-Z0-9]+>", "", event.get("text") or "").strip()
+    if not text:
+        return
+    print("[Slack chat] replying as", _persona)
+    with _lock:
+        answer = _strip_repeat_greeting(_ask(text))
+        _history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": answer}])
+        del _history[:-HISTORY_TURNS * 2]
+    client.chat_postMessage(channel=event["channel"], text=answer)
+
+
+def _build_app(token):
+    app = App(token=token)
+
+    @app.event("message")
+    def on_message(event, client):
+        if event.get("subtype") or event.get("bot_id") or event.get("channel_type") != "im":
+            return
+        _handle(event, client)
+
+    @app.event("app_mention")
+    def on_mention(event, client):
+        _handle(event, client)
+
+    return app
+
+
+def start():
+    global _handler
+    token = slack_send._env_value("SENTINEL_SLACK_TOKEN")
+    app_token = slack_send._env_value("SENTINEL_SLACK_APP_TOKEN")
+    if not token or not app_token:
+        print("[Slack chat] off: needs SENTINEL_SLACK_TOKEN and SENTINEL_SLACK_APP_TOKEN")
+        return
+    if not slack_send._env_value("SENTINEL_SLACK_OWNER_ID"):
+        print("[Slack chat] off: needs SENTINEL_SLACK_OWNER_ID")
+        return
+    try:
+        _handler = SocketModeHandler(_build_app(token), app_token)
+        _handler.connect()  # non-blocking; runs in its own threads
+        print("[Slack chat] listening for messages from the owner")
+    except Exception as e:
+        print("[Slack chat] could not start:", e)

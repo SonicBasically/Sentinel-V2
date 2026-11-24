@@ -1,0 +1,304 @@
+"""Check Steam games for pending updates, open Steam so it downloads them, and report when done.
+
+Only Steam games are handled (non-Steam shortcuts and custom launchers can't update through Steam).
+Steam is opened as a normal, visible window. Closing it is allowed: whatever is still pending is
+reported as unfinished. Nothing here reads or writes credentials.
+"""
+import glob, os, shutil, subprocess, threading, time
+from pathlib import Path
+
+import games as game_lib
+
+UPDATE_REQUIRED = 2      # StateFlags bit: an update is waiting
+FULLY_INSTALLED = 4      # StateFlags bit: game is installed
+UPDATE_RUNNING = 1024    # StateFlags bit: an update is downloading right now
+POLL_SECONDS = 15
+GIVE_UP_SECONDS = 6 * 3600
+GRACE_SECONDS = 90
+
+_lock = threading.Lock()
+_state = {"phase": "idle", "started": None, "finished": None,
+          "total": 0, "pending": [], "message": "No update check has run yet."}
+
+
+def _steam_games():
+    """Installed Steam games (not tools, not shortcuts), de-duplicated by appid."""
+    seen, out = set(), []
+    for root in game_lib._steam_roots():
+        for d in game_lib._library_dirs(root):
+            for f in sorted(glob.glob(str(d / "appmanifest_*.acf"))):
+                m = game_lib._parse_manifest(f)
+                if not m or m["appid"] in seen:
+                    continue
+                name = m["name"].lower()
+                if name.startswith(game_lib.JUNK_PREFIXES) or name in game_lib.JUNK_NAMES:
+                    continue
+                if not (m["flags"] & FULLY_INSTALLED):
+                    continue
+                seen.add(m["appid"])
+                m["library"] = str(d.parent)  # library root, which SteamCMD needs as its install dir
+                out.append(m)
+    return out
+
+
+def _needs_update(m):
+    return bool(m["flags"] & (UPDATE_REQUIRED | UPDATE_RUNNING))
+
+
+def list_pending():
+    return [{"appid": m["appid"], "name": m["name"], "library": m["library"]}
+            for m in _steam_games() if _needs_update(m)]
+
+
+def _steam_running():
+    if not shutil.which("pgrep"):
+        return True  # can't tell, so keep waiting until the time limit
+    return subprocess.run(["pgrep", "-x", "steam"], stdout=subprocess.DEVNULL).returncode == 0
+
+
+def _finish(message, pending):
+    with _lock:
+        _state.update(phase="done", finished=time.time(), pending=pending, message=message)
+
+
+def _steam_env():
+    """Environment for launching/looking at Steam. Uses the desktop's DISPLAY/XAUTHORITY, taken from a
+    running Steam process if the backend's own environment doesn't have them."""
+    env = dict(os.environ)
+    if not env.get("DISPLAY") or not env.get("XAUTHORITY"):
+        for comm in glob.glob("/proc/[0-9]*/comm"):
+            try:
+                proc = Path(comm).parent
+                if Path(comm).read_text().strip() != "steam":
+                    continue
+                for kv in (proc / "environ").read_bytes().split(b"\0"):
+                    if kv.startswith((b"DISPLAY=", b"XAUTHORITY=")):
+                        k, v = kv.decode("utf-8", "replace").split("=", 1)
+                        env.setdefault(k, v)
+                break
+            except OSError:
+                continue
+    return env
+
+
+def _steam_window(env):
+    """Id of the visible main Steam window (title 'Steam'), or None. Uses the window manager's client list."""
+    r = subprocess.run(["xprop", "-root", "_NET_CLIENT_LIST"], env=env, capture_output=True, text=True)
+    for wid in re.findall(r"0x[0-9a-fA-F]+", r.stdout):
+        name = subprocess.run(["xprop", "-id", wid, "WM_NAME"], env=env, capture_output=True, text=True).stdout
+        if '"Steam"' not in name:
+            continue
+        info = subprocess.run(["xwininfo", "-id", wid], env=env, capture_output=True, text=True).stdout
+        if "IsViewable" in info:
+            return wid
+    return None
+
+
+def _bring_steam_forward(env, wid):
+    for cmd in (["xdotool", "windowmap", wid], ["xdotool", "windowactivate", "--sync", wid],
+                ["xdotool", "windowraise", wid]):
+        subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _wait_for_steam_window(env, timeout=90):
+    """Wait for Steam's main window to appear, then bring it forward. True if it showed up."""
+    end = time.time() + timeout
+    while time.time() < end:
+        wid = _steam_window(env)
+        if wid:
+            _bring_steam_forward(env, wid)
+            return True
+        time.sleep(2)
+    return False
+
+
+def _watch(started_pending):
+    """Wait for the Steam window, then check manifests until nothing is pending, Steam is closed,
+    or the time limit passes."""
+    deadline = time.time() + GIVE_UP_SECONDS
+    env = _steam_env()
+    with _lock:
+        _state["message"] = "Waiting for the Steam window to open..."
+    if _wait_for_steam_window(env):
+        with _lock:
+            _state["message"] = "Steam is open. Checking for updates..."
+        time.sleep(10)  # let Steam load its library and start its own update check
+    else:
+        with _lock:
+            _state["message"] = "Steam didn't show a window. Checking files anyway..."
+    grace_end = time.time() + GRACE_SECONDS  # Steam can take a moment to flag updates after opening
+    seen = {p["appid"]: p["name"] for p in started_pending}
+    time.sleep(POLL_SECONDS)
+    while True:
+        pending = list_pending()
+        for p in pending:
+            seen[p["appid"]] = p["name"]
+        names = [p["name"] for p in pending]
+        total = len(seen)
+        with _lock:
+            _state["pending"] = pending
+            _state["total"] = total
+            if total:
+                _state["message"] = "Updating: %d of %d done." % (total - len(pending), total)
+            else:
+                _state["message"] = "Checking Steam for updates..."
+        if not pending:
+            if not seen and time.time() < grace_end:
+                time.sleep(POLL_SECONDS)
+                continue
+            if not seen:
+                _finish("Checked Steam. All games are up to date.", [])
+            else:
+                _finish(("All %d game is up to date." if total == 1 else "All %d games are up to date.") % total, [])
+            return
+        if not _steam_running():
+            _finish("Steam was closed before everything finished. Still pending: %s." % ", ".join(names), pending)
+            return
+        if time.time() > deadline:
+            _finish("Stopped waiting after 6 hours. Still pending: %s." % ", ".join(names), pending)
+            return
+        time.sleep(POLL_SECONDS)
+
+
+def start_updates():
+    """Open Steam (visible) and watch the games that need updates. Returns right away."""
+    with _lock:
+        if _state["phase"] == "running":
+            return {"ok": True, "started": False, "message": _state["message"]}
+    pending = list_pending()
+    cmd = game_lib._steam_cmd()
+    if not cmd:
+        return {"ok": False, "error": "Steam was not found on this machine."}
+    # Always open Steam (visible) on the Downloads page, even when nothing is flagged yet, so it can check.
+    subprocess.Popen(cmd + ["steam://open/downloads"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, env=_steam_env())
+    with _lock:
+        _state.update(phase="running", started=time.time(), finished=None, total=len(pending),
+                      pending=pending, message="Opened Steam to check %d game(s) needing updates." % len(pending))
+    threading.Thread(target=_watch, args=(pending,), daemon=True).start()
+    if not pending:
+        return {"ok": True, "started": True, "count": 0,
+                "message": "Opened Steam to check for updates. Nothing is flagged yet."}
+    names = ", ".join(p["name"] for p in pending)
+    return {"ok": True, "started": True, "count": len(pending), "games": names,
+            "message": "Opened Steam to update %d game(s): %s." % (len(pending), names)}
+
+
+def status():
+    with _lock:
+        return dict(_state)
+
+
+# ── chat hook (called from server.py /command) ───────────────────────
+import re
+
+_UPDATE_Q = re.compile(r"\bupdat(e|es|ed|ing)\b")
+_GAME_WORD = re.compile(r"\b(games?|steam)\b")
+_STATUS_Q = re.compile(r"\b(done|finished|complete|status|progress)\b")
+
+
+def try_chat(text):
+    """Answer 'do any of my games need updates?' and 'are the updates done?'. None if not a match."""
+    t = (text or "").lower()
+    if not _UPDATE_Q.search(t) or not _GAME_WORD.search(t):
+        return None
+    if _STATUS_Q.search(t) and status()["phase"] in ("running", "done"):
+        st = status()
+        return {"handled": True, "reply": st["message"]}
+    res = start_steamcmd_updates()
+    if not res.get("ok"):
+        return {"handled": True, "reply": res.get("error", "Steam update check failed.")}
+    if not res.get("started"):
+        return {"handled": True, "reply": res.get("message", "All Steam games are up to date.")}
+    return {"handled": True, "reply": res["message"] + " I'll tell you when they're all done.", "watch_steam": True}
+
+
+# ── SteamCMD update path ────────────────────────────────────────────
+# Uses Valve's SteamCMD (installed in ~/steamcmd) with the cached login from a one-time terminal login.
+# Steam is closed first (graceful `steam -shutdown`), each game is updated with `app_update`, then Steam
+# is reopened. The login name is set with SENTINEL_STEAM_LOGIN; no password is stored here.
+STEAMCMD = Path.home() / "steamcmd" / "steamcmd.sh"
+STEAM_LOGIN = os.environ.get("SENTINEL_STEAM_LOGIN", "cvthefox")
+APP_TIMEOUT = 3 * 3600
+_SUCCESS = re.compile(r"Success! App '\d+' (fully installed|already up to date)")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m|\[0m")
+
+
+def _run_steamcmd(appid, library_root):
+    """Update one app. Returns (ok, reason). Install dir is set before login, as Valve recommends."""
+    cmd = [str(STEAMCMD), "+force_install_dir", library_root, "+login", STEAM_LOGIN,
+           "+app_update", str(appid), "+quit"]
+    try:
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=APP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False, "timed out"
+    out = _ANSI.sub("", (r.stdout or "") + (r.stderr or ""))
+    if _SUCCESS.search(out):
+        return True, ""
+    if "Cached credentials not found" in out or "Invalid Password" in out:
+        return False, "SteamCMD isn't logged in. Run ~/steamcmd/steamcmd.sh +login %s in a terminal" % STEAM_LOGIN
+    errors = [l.strip() for l in out.splitlines() if "ERROR" in l or "Failure" in l or "Error" in l]
+    if errors:
+        return False, errors[-1]
+    lines = [l.strip() for l in out.splitlines() if l.strip() and not l.strip().startswith(("steamcmd.sh", "Redirecting", "Logging directory"))]
+    return False, lines[-1] if lines else "no output from SteamCMD"
+
+
+def _wait_for_steam_exit(seconds=60):
+    end = time.time() + seconds
+    while time.time() < end:
+        if not _steam_running():
+            return True
+        time.sleep(2)
+    return not _steam_running()
+
+
+def _steamcmd_worker(items):
+    env = _steam_env()
+    with _lock:
+        _state.update(phase="running", finished=None, total=len(items), pending=items,
+                      message="Closing Steam...")
+    subprocess.run(game_lib._steam_cmd() + ["-shutdown"], env=env,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not _wait_for_steam_exit():
+        _finish("Steam didn't close, so I didn't update anything. Close Steam and ask me again.", items)
+        return
+    failed = []
+    done = []
+    for i, it in enumerate(items, 1):
+        with _lock:
+            _state["message"] = "Updating %s (%d of %d)..." % (it["name"], i, len(items))
+        ok, reason = _run_steamcmd(it["appid"], it["library"])
+        (done if ok else failed).append({**it, "reason": reason} if not ok else it)
+        if not ok and reason.startswith("SteamCMD isn't logged in"):
+            # Don't keep retrying with no login; mark the rest as not attempted.
+            for rest in items[i:]:
+                failed.append({**rest, "reason": "not tried: SteamCMD isn't logged in"})
+            break
+    subprocess.Popen(game_lib._steam_cmd() + ["steam://open/downloads"], env=env,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    names = ", ".join(d["name"] for d in done)
+    if not failed:
+        _finish("Updated %d game(s): %s. Steam is open again." % (len(done), names or "none"), [])
+    else:
+        bad = "; ".join("%s (%s)" % (f["name"], f["reason"]) for f in failed)
+        _finish("Updated %d of %d. Failed: %s. Steam is open again." % (len(done), len(items), bad), failed)
+
+
+def start_steamcmd_updates():
+    """Close Steam, update the pending Steam games with SteamCMD, reopen Steam, and report. Returns right away."""
+    with _lock:
+        if _state["phase"] == "running":
+            return {"ok": True, "started": False, "message": _state["message"]}
+    pending = list_pending()
+    if not pending:
+        return {"ok": True, "started": False, "message": "Checked Steam. All games are up to date."}
+    if not STEAMCMD.exists():
+        return {"ok": False, "error": "SteamCMD isn't installed at ~/steamcmd yet."}
+    threading.Thread(target=_steamcmd_worker, args=(pending,), daemon=True).start()
+    names = ", ".join(p["name"] for p in pending)
+    return {"ok": True, "started": True, "count": len(pending), "games": names,
+            "message": "Closing Steam to update %d game(s): %s." % (len(pending), names)}

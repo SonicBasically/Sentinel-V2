@@ -1,0 +1,16 @@
+[Unit]
+Description=Sentinel V2 UI files (port 8766 on localhost and Tailscale)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/OG_Drive/GitHub/Sentinel-V2
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do tailscale ip -4 >/dev/null 2>&1 && exit 0; sleep 2; done; exit 0'
+ExecStart=/bin/bash %h/Desktop/OG_Drive/GitHub/Sentinel-V2/tools/sentinel-ui.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
