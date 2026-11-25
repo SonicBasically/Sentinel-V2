@@ -1158,6 +1158,13 @@ def games_launch(req: GameLaunchReq):
 import media as media_lib
 app.include_router(media_lib.make_router(verify_key))
 
+# Saved chats live on the server so papa-s and MemEx can keep them in step (see link.py).
+import chats as chat_lib
+app.include_router(chat_lib.build_router(verify_key))
+import link as link_lib
+app.include_router(link_lib.make_router(verify_key))
+link_lib.start_background_sync()
+
 # ── DIRECT COMMANDS (voice and chat) ──
 # Open a game or app, music controls (playerctl) and volume, run without the language model.
 import voice_commands

@@ -3547,7 +3547,34 @@ function _renderSettings(){
     _setRow('Theme','Colour scheme',_setSelect('Theme',modes,activeTheme,function(v){applyTheme(v);})),
     _setRow('Start on','Chat or the orb screen',_setSelect('Start on',[['chat','Chat'],['orb','Orb']],_view,function(v){showView(v);}))
   ]);
-  pn.appendChild(voice); pn.appendChild(assistant); pn.appendChild(_phoneSection()); pn.appendChild(look);
+  pn.appendChild(voice); pn.appendChild(assistant); pn.appendChild(_phoneSection()); pn.appendChild(look); pn.appendChild(_linkSection());
+}
+// Linked machines: shows whether the other Sentinel machine is reachable and what the last chat sync did.
+var _linkBox=null;
+function _linkSection(){
+  var box=_setEl('div','set-hint','Checking the other machine...');
+  var btn=_setEl('button','set-btn','Sync now');
+  btn.onclick=function(){ box.textContent='Syncing...'; bfetch(backend()+'/link/sync',{method:'POST'}).then(function(){ _linkLoad(box); }).catch(function(){ _linkLoad(box); }); };
+  var ctl=_setEl('div','set-ctl'); ctl.appendChild(box); ctl.appendChild(btn);
+  _linkLoad(box);
+  return _setSection('Linked machines',[_setRow('Other machine','Chats and commands go between the two machines',ctl)]);
+}
+function _linkText(d){
+  if(!d.configured) return 'Not set up yet (add the other machine to ~/.config/sentinel/.env)';
+  if(!d.reachable) return 'Offline';
+  var parts=['Online'];
+  if(d.clock_warning) parts.push('clocks differ by about '+Math.round(Math.abs(d.clock_skew_ms)/1000)+' s');
+  if(d.last_error) parts.push('last sync failed: '+d.last_error);
+  else if(d.last_result){
+    var r=d.last_result, gone=(r.deleted_here||0)+(r.deleted_there||0);
+    parts.push('last sync: '+r.pulled+' in, '+r.pushed+' out'+(gone?', '+gone+' deleted':''));
+  }
+  return parts.join(' · ');
+}
+function _linkLoad(box){
+  bfetch(backend()+'/link/status').then(function(r){return r.ok?r.json():null;}).then(function(d){
+    box.textContent = d ? _linkText(d) : 'Status unavailable';
+  }).catch(function(){ box.textContent='Status unavailable'; });
 }
 var _phoneContacts=null, _phoneSynced=null, _phoneMsg='';
 function _phoneLoad(){

@@ -110,6 +110,40 @@ def _snippet(path: Path, terms: list) -> str:
     return ""
 
 
+_TOMB_FILE = ".deleted.json"
+
+
+def read_tombstones():
+    """Chats deleted on this machine: {chat id: when it was deleted, ms}."""
+    p = CHATS_DIR / _TOMB_FILE
+    try:
+        return {str(k): float(v) for k, v in json.loads(p.read_text(encoding="utf-8")).items()}
+    except Exception:
+        return {}
+
+
+def _write_tombstones(data):
+    CHATS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CHATS_DIR / ".deleted.tmp"
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, CHATS_DIR / _TOMB_FILE)
+
+
+def write_tombstone(chat_id, when_ms):
+    with _lock:
+        data = read_tombstones()
+        data[chat_id] = when_ms
+        _write_tombstones(data)
+
+
+def clear_tombstone(chat_id):
+    with _lock:
+        data = read_tombstones()
+        if chat_id in data:
+            del data[chat_id]
+            _write_tombstones(data)
+
+
 def build_router(verify_key) -> APIRouter:
     r = APIRouter(dependencies=[Depends(verify_key)])
 
@@ -168,6 +202,7 @@ def build_router(verify_key) -> APIRouter:
                 "messages": msgs,
             }
             _write_atomic(p, data)
+            clear_tombstone(chat_id)
         return {"ok": True, "id": chat_id, "title": data["title"], "updated": data["updated"], "count": len(msgs)}
 
     @r.post("/chats/{chat_id}/rename")
@@ -192,6 +227,11 @@ def build_router(verify_key) -> APIRouter:
                 raise HTTPException(404, "Chat not found.")
             p.unlink()
             _cache.pop(str(p), None)
+            write_tombstone(chat_id, _now_ms())
         return {"ok": True}
+
+    @r.get("/chats-deleted")
+    def list_deleted():
+        return read_tombstones()
 
     return r
