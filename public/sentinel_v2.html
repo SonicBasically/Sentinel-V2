@@ -141,6 +141,19 @@ body{--mode:var(--accent);}
 .dev-name em{color:var(--accent);font-style:normal;font-weight:400;font-size:11px;}
 .dev-meta{margin-left:auto;color:var(--text2);font-size:11px;}
 .dev-empty{font-family:var(--mono);font-size:12px;color:var(--text2);}
+.dev-row.dev-link{cursor:pointer;}
+.dev-row.dev-link:hover{border-color:var(--accent);}
+.dev-go{color:var(--accent);font-size:11px;white-space:nowrap;font-family:var(--mono);}
+.dev-back{background:none;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:6px 10px;font-family:var(--mono);font-size:12px;cursor:pointer;margin-bottom:10px;}
+.dev-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;}
+.dev-stat{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:var(--mono);}
+.dev-stat-l{color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;}
+.dev-stat-v{color:var(--text);font-size:14px;font-weight:600;margin-top:4px;}
+.dev-bar{height:5px;background:var(--border);border-radius:3px;margin-top:8px;overflow:hidden;}
+.dev-bar span{display:block;height:100%;background:var(--green);}
+.dev-bar span.warn{background:var(--accent);}
+.dev-bar span.crit{background:#f87171;}
+.dev-note{color:var(--text2);font-size:11px;font-family:var(--mono);grid-column:1/-1;}
 .game-top{display:flex;gap:8px;}
 #game-q{flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 10px;outline:none;}
 #game-q:focus{border-color:var(--accent);}
@@ -1276,11 +1289,16 @@ async function renderDevices(){
     var online=d.devices.filter(function(x){return x.online;}).length;
     document.getElementById('panel-title').textContent='Devices — '+online+' of '+d.devices.length+' online';
     body.innerHTML=d.devices.map(function(x){
-      return '<div class="dev-row '+(x.online?'on':'off')+'">'
+      var linked=x.kind&&x.kind!=='other';
+      return '<div class="dev-row '+(x.online?'on':'off')+(linked?' dev-link':'')+'"'+(linked?' data-kind="'+_escHtml(x.kind)+'" data-name="'+_escHtml(x.name)+'" role="button" tabindex="0"':'')+'>'
         +'<span class="dev-dot"></span>'
-        +'<span class="dev-name">'+_escHtml(x.name)+(x.you?' <em>(this device)</em>':(x.self?' <em>(Sentinel host)</em>':''))+'</span>'
-        +'<span class="dev-meta">'+_escHtml(x.ip)+' · '+_escHtml(x.os)+'</span></div>';
+        +'<span class="dev-name">'+_escHtml(x.name)+(x.you?' <em>(this device)</em>':(x.self?' <em>(Sentinel host)</em>':(x.kind==='phone'?' <em>(phone)</em>':'')))+'</span>'
+        +'<span class="dev-meta">'+_escHtml(x.ip)+' · '+_escHtml(x.os)+'</span>'
+        +(linked?'<span class="dev-go">Stats ›</span>':'')+'</div>';
     }).join('');
+    body.querySelectorAll('.dev-link').forEach(function(el){
+      el.onclick=function(){ showDeviceStats(el.dataset.kind, el.dataset.name); };
+    });
   }catch(e){
     body.innerHTML='<div class="dev-empty">Could not reach backend: '+_escHtml(e.message)+'</div>';
   }
@@ -1289,10 +1307,73 @@ function showDevices(){
   document.getElementById('panel-title').textContent='Devices';
   document.getElementById('panel-body').innerHTML='<div class="dev-empty">Loading…</div>';
   document.getElementById('panel-overlay').classList.add('show');
+  _devView=null;
   renderDevices();
   if(_devTimer) clearInterval(_devTimer);
-  _devTimer=setInterval(renderDevices,10000);
+  _devTimer=setInterval(function(){ if(_devView) refreshDeviceStats(); else renderDevices(); },5000);
 }
+
+// Stats for one device (the local computer, MemEx, or the phone). The panel refreshes every 5 s.
+var _devView=null;   // null = the device list; {kind,name} = one device's stats
+function _devBar(pct){
+  if(pct==null) return '';
+  var c=pct>85?' crit':pct>70?' warn':'';
+  return '<div class="dev-bar"><span class="'+c.trim()+'" style="width:'+Math.min(100,Math.max(0,pct))+'%"></span></div>';
+}
+function _devStat(label,value,pct){
+  return '<div class="dev-stat"><div class="dev-stat-l">'+_escHtml(label)+'</div><div class="dev-stat-v">'+_escHtml(value)+'</div>'+_devBar(pct)+'</div>';
+}
+function _devCards(s,age){
+  var out=[], c=s.cpu||{}, m=s.memory||{}, dk=s.disk||{};
+  if(c.usage_pct!=null) out.push(_devStat('CPU', c.usage_pct+'%'+(c.temp_c!=null?' · '+c.temp_c+'°C':''), c.usage_pct));
+  else if(c.cores!=null) out.push(_devStat('CPU cores', c.cores+' (load not reported here)', null));
+  if(m.used_gb!=null && m.total_gb) out.push(_devStat('RAM', m.used_gb+' / '+m.total_gb+' GB', m.usage_pct));
+  if(dk.used_gb!=null && dk.total_gb) out.push(_devStat('Storage', dk.used_gb+' / '+dk.total_gb+' GB', dk.usage_pct));
+  (s.gpus||[]).forEach(function(g){
+    var v=(g.util_pct!=null?g.util_pct+'%':'—')+(g.temp_c!=null?' · '+g.temp_c+'°C':'')+(g.vram_total_gb?' · VRAM '+g.vram_used_gb+' / '+g.vram_total_gb+' GB':'');
+    out.push(_devStat('GPU · '+(g.name||'GPU'), v, g.util_pct));
+  });
+  if(s.battery){
+    var b=s.battery;
+    out.push(_devStat('Battery', (b.level_pct!=null?b.level_pct+'%':'—')+(b.charging?' · charging':'')+(b.temp_c!=null?' · '+b.temp_c+'°C':''), null));
+  }
+  if(s.uptime) out.push(_devStat('Uptime', s.uptime, null));
+  if(age!=null) out.push('<div class="dev-note">Updated '+age+' s ago</div>');
+  return '<div class="dev-stats">'+out.join('')+'</div>';
+}
+async function refreshDeviceStats(){
+  var v=_devView; if(!v) return;
+  var body=document.getElementById('panel-body');
+  var head='<button class="dev-back" id="devBack">‹ All devices</button>';
+  try{
+    var r=await bfetch(backend()+'/devices/stats?kind='+encodeURIComponent(v.kind),{signal:AbortSignal.timeout(9000)});
+    var d=await r.json();
+    if(_devView!==v) return;   // the user has moved on
+    body.innerHTML=head+(d.ok?_devCards(d.stats,d.age_s):'<div class="dev-empty">'+_escHtml(d.error||'Could not read this device.')+'</div>');
+  }catch(e){
+    if(_devView!==v) return;
+    body.innerHTML=head+'<div class="dev-empty">Could not reach '+_escHtml(v.name)+': '+_escHtml(e.message)+'</div>';
+  }
+  var back=document.getElementById('devBack');
+  if(back) back.onclick=function(){ _devView=null; document.getElementById('panel-title').textContent='Devices'; renderDevices(); };
+}
+function showDeviceStats(kind,name){
+  _devView={kind:kind,name:name};
+  document.getElementById('panel-title').textContent=name;
+  document.getElementById('panel-body').innerHTML='<div class="dev-empty">Loading…</div>';
+  refreshDeviceStats();
+}
+
+// The Android app reads its own battery, memory and storage and posts them here while it is open.
+async function pushPhoneStats(){
+  var P=phonePlugin();
+  if(!IS_NATIVE||!P||!P.getDeviceStats) return;
+  try{
+    var s=await P.getDeviceStats();
+    await bfetch(backend()+'/devices/phone/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s),signal:AbortSignal.timeout(6000)});
+  }catch(e){}
+}
+if(IS_NATIVE){ setTimeout(pushPhoneStats,3000); setInterval(pushPhoneStats,30000); }
 
 function showTab(tab){
   ['cmds','dash'].forEach(function(t){
@@ -3390,7 +3471,7 @@ async function qcmd(cmd){
     disk:function(){return bfetch(b+'/system/disks').then(function(r){return r.json();}).then(function(d){return d.partitions.map(function(p){return p.mountpoint.padEnd(20)+' '+p.used_gb+'/'+p.total_gb+'GB ('+p.usage_pct+'%)';}).join('\n');});},
     clipboard:function(){return bfetch(b+'/clipboard/get').then(function(r){return r.json();}).then(function(d){return d.content;});},
     volume:function(){return bfetch(b+'/volume/get').then(function(r){return r.json();}).then(function(d){return d.output;});},
-    git:function(){return bfetch(b+'/git/status?path='+encodeURIComponent('/home/thomasgomez')).then(function(r){return r.json();}).then(function(d){return d.output||'No git repository found at home directory. Navigate to a repo first.';});},
+    git:function(){return bfetch(b+'/git/status?path='+encodeURIComponent('/home/thomasgomez/Desktop/OG_Drive/GitHub/Sentinel-V2')).then(function(r){return r.json();}).then(function(d){return d.output||'No git repository found for Sentinel-V2.';});},
     memory_recall:function(){return bfetch(b+'/memory/get').then(function(r){return r.json();}).then(function(d){var m=d.memory;return Object.keys(m).length?JSON.stringify(m,null,2):'No memories stored yet. Ask Sentinel to remember something by saying "remember that..."';});}
   };
   var ask={

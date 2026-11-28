@@ -75,7 +75,7 @@ app = FastAPI(title="Sentinel V2 Backend", version="3.1.0",
 # Restricting origins to local app environments instead of wildcard *
 app.add_middleware(
     CORSMiddleware, 
-    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765"],
+    allow_origins=["http://localhost:8766", "http://127.0.0.1:8766", "http://localhost:8765", "http://localhost", "https://localhost"],
     allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.ts\.net):(8765|8766)$",
     allow_methods=["*"], 
     allow_headers=["*"]
@@ -300,6 +300,17 @@ def _distro():
     except Exception as e: print(f"[Metrics System] Target OS fingerprint failed: {e}")
     return platform.system()
 
+def _cpu_temp():
+    """Hottest CPU sensor reading in °C, or None when the machine exposes no temperature sensors."""
+    try:
+        temps = psutil.sensors_temperatures() or {}
+        for key in ("coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz"):
+            if temps.get(key):
+                return round(max(t.current for t in temps[key]))
+    except Exception:
+        pass
+    return None
+
 @app.get("/")
 def root(): return {"status": "online", "name": "Sentinel V2", "version": "3.1.0"}
 
@@ -328,7 +339,7 @@ def system_info():
     return {
         "hostname": platform.node(), "os": f"{platform.system()} {platform.release()}",
         "distro": _distro(), "kernel": platform.version(), "arch": platform.machine(),
-        "cpu": {"model":_cpu_model(),"cores_physical":psutil.cpu_count(logical=False),"cores_logical":psutil.cpu_count(logical=True),"usage_pct":cpu_usage,"freq_mhz":round(cpu_freq.current) if cpu_freq else None},
+        "cpu": {"model":_cpu_model(),"cores_physical":psutil.cpu_count(logical=False),"cores_logical":psutil.cpu_count(logical=True),"usage_pct":cpu_usage,"temp_c":_cpu_temp(),"freq_mhz":round(cpu_freq.current) if cpu_freq else None},
         "memory": {"total_gb":round(mem.total/1e9,1),"used_gb":round(mem.used/1e9,1),"available_gb":round(mem.available/1e9,1),"usage_pct":mem.percent},
         "swap": {"total_gb":round(swap.total/1e9,1),"used_gb":round(swap.used/1e9,1),"usage_pct":swap.percent},
         "disk": {"total_gb":round(disk.total/1e9,1),"used_gb":round(disk.used/1e9,1),"free_gb":round(disk.free/1e9,1),"usage_pct":disk.percent},
@@ -1063,8 +1074,39 @@ def get_tailnet_devices(request: Request):
         }
 
     devs = [row(data.get("Self", {}), True)] + [row(p) for p in (data.get("Peer") or {}).values()]
+    try:
+        peer_ip = devices_lib.peer_host()
+    except Exception:
+        peer_ip = ""
+    for d in devs:
+        d["kind"] = devices_lib.classify(d, peer_ip)
     devs.sort(key=lambda d: (not d["online"], not d["self"], d["name"].lower()))
     return {"ok": True, "devices": devs}
+
+import devices as devices_lib
+devices_lib.LOCAL = system_info
+
+@app.get("/devices/stats", dependencies=[Depends(verify_key)])
+def device_stats(kind: str = "local"):
+    """Health readings for the Devices panel: kind = local (this computer), peer (MemEx), or phone."""
+    if kind not in ("local", "peer", "phone"):
+        raise HTTPException(400, "Unknown device kind.")
+    return devices_lib.read(kind)
+
+@app.post("/devices/phone/heartbeat", dependencies=[Depends(verify_key)])
+async def phone_heartbeat(request: Request):
+    """The Android app posts its own readings here while it is open (the PC cannot query the phone)."""
+    raw = await request.body()
+    if len(raw) > 8000:
+        raise HTTPException(413, "Heartbeat too large.")
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(400, "Expected JSON.")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expected a JSON object.")
+    devices_lib.record_phone(body)
+    return {"ok": True}
 
 @app.get("/notifications", dependencies=[Depends(verify_key)])
 def get_notifications():

@@ -9,6 +9,11 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.app.ActivityManager;
+import android.content.IntentFilter;
+import android.os.BatteryManager;
+import android.os.Environment;
+import android.os.StatFs;
 import android.content.SharedPreferences;
 
 import androidx.core.app.NotificationCompat;
@@ -472,6 +477,63 @@ public class SentinelPhonePlugin extends Plugin {
                 call.reject("sync_failed");
             }
         }, "sentinel-contacts-sync").start();
+    }
+
+    // Battery, memory, storage and uptime for the Devices panel on the PC. The page sends these
+    // as a heartbeat to the PC backend while the app is open. Android does not expose per-app CPU load.
+    @PluginMethod
+    public void getDeviceStats(PluginCall call) {
+        try {
+            JSObject out = new JSObject();
+
+            ActivityManager am = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            double memTotalGb = mi.totalMem / 1e9;
+            double memUsedGb = (mi.totalMem - mi.availMem) / 1e9;
+            JSObject mem = new JSObject();
+            mem.put("total_gb", round1(memTotalGb));
+            mem.put("used_gb", round1(memUsedGb));
+            mem.put("usage_pct", memTotalGb > 0 ? Math.round(memUsedGb / memTotalGb * 100) : 0);
+            out.put("memory", mem);
+
+            StatFs st = new StatFs(Environment.getDataDirectory().getPath());
+            double diskTotalGb = st.getTotalBytes() / 1e9;
+            double diskUsedGb = (st.getTotalBytes() - st.getAvailableBytes()) / 1e9;
+            JSObject disk = new JSObject();
+            disk.put("total_gb", round1(diskTotalGb));
+            disk.put("used_gb", round1(diskUsedGb));
+            disk.put("usage_pct", diskTotalGb > 0 ? Math.round(diskUsedGb / diskTotalGb * 100) : 0);
+            out.put("disk", disk);
+
+            Intent bi = getContext().registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (bi != null) {
+                int level = bi.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = bi.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                int status = bi.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                int tenthsC = bi.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
+                JSObject bat = new JSObject();
+                if (level >= 0 && scale > 0) bat.put("level_pct", Math.round(level * 100f / scale));
+                bat.put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING
+                        || status == BatteryManager.BATTERY_STATUS_FULL);
+                if (tenthsC != Integer.MIN_VALUE) bat.put("temp_c", round1(tenthsC / 10.0));
+                out.put("battery", bat);
+            }
+
+            JSObject cpu = new JSObject();
+            cpu.put("cores_logical", Runtime.getRuntime().availableProcessors());
+            out.put("cpu", cpu);
+
+            long up = android.os.SystemClock.elapsedRealtime() / 1000;
+            out.put("uptime", (up / 3600) + "h " + ((up % 3600) / 60) + "m");
+            call.resolve(out);
+        } catch (Exception e) {
+            call.reject("Could not read device stats: " + e.getMessage());
+        }
+    }
+
+    private static double round1(double v) {
+        return Math.round(v * 10) / 10.0;
     }
 
     /** Asks for permission to send texts. Each text still needs a Send tap. */

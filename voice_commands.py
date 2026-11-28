@@ -455,8 +455,31 @@ _PEER_RE = re.compile(r"^(?:please )?(?:open|launch|start|run) (?P<app>.+?) (?:o
                       r"other (?:machine|computer|pc)|computer 2|second computer)$")
 
 
+_DEVICE_RE = re.compile(r"^(?:how(?:'s| is| are)|check|status of|what(?:'s| is) the status of) (?:the |my )?"
+                        r"(?P<who>this (?:computer|pc|machine)|papa[ -]?s(?: pc)?|main (?:computer|pc|machine)|desktop|"
+                        r"mem ?ex|computer 2|second computer|other (?:machine|computer|pc)|phone|android|s26)"
+                        r"(?: (?:doing|running|looking|today|status|temps?|temperatures?|performing))?$")
+
+
+def _device_status(who):
+    """'how is my phone doing' / 'how is memex doing' — the stats for that device, in one sentence."""
+    import devices as devices_lib
+    w = re.sub(r"[^a-z0-9]", "", who.lower())
+    if w in ("phone", "android", "s26"):
+        kind, label = "phone", "Your phone"
+    elif w in ("memex", "computer2", "secondcomputer") or w.startswith("other"):
+        kind, label = "peer", "MemEx"
+    else:
+        kind, label = "local", "This computer"
+    return _result(devices_lib.describe(label, devices_lib.read(kind)))
+
+
 def try_command(text, app_aliases=None):
     """Run a recognized command. Returns None if `text` is not a command."""
+    stripped = (text or "").strip().lower().rstrip(".!?")
+    dev = _DEVICE_RE.match(stripped)
+    if dev:
+        return _device_status(dev.group("who"))
     peer = _PEER_RE.match((text or "").strip().lower().rstrip(".!?"))
     if peer:
         return _run_peer(peer.group("app"), peer.group("target"))
