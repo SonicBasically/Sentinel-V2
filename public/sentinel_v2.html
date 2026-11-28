@@ -685,6 +685,9 @@ body.xmas #xmas-count{display:inline-block}
 @keyframes bootRing{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:.55}}
 @keyframes bootWord{from{opacity:0;letter-spacing:.5em}to{opacity:1;letter-spacing:.32em}}
 @media (prefers-reduced-motion:reduce){#boot,#boot *{animation:none!important;transition:none!important}#boot-word{opacity:1}#boot-orb .b-core{opacity:1}}
+/* Low resource mode (Settings > Appearance): no animations, glows, blur or snow. */
+body.lowres *,body.lowres *::before,body.lowres *::after{animation:none!important;transition:none!important;box-shadow:none!important;text-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+body.lowres #xmas-snow,body.lowres #xmas-decor{display:none!important;}
 </style>
 </head>
 <body>
@@ -2059,7 +2062,7 @@ function showView(v){
   ['home','chat','orb'].forEach(function(k){document.getElementById('vt-'+k).classList.toggle('active',_view===k);});
   try{localStorage.setItem('sentinel_view',_view);}catch(e){}
   if(_orbTimer){clearInterval(_orbTimer);_orbTimer=null;}
-  if(_view==='orb'){orbTick();_orbTimer=setInterval(orbTick,100);}
+  if(_view==='orb'){orbTick();_orbTimer=setInterval(orbTick,lowRes?500:100);}
   else{orbSet(false);}
   if(_view==='home'){dashRefresh();if(!_dashTimer)_dashTimer=setInterval(dashRefresh,30000);}
   else if(_dashTimer){clearInterval(_dashTimer);_dashTimer=null;}
@@ -3625,10 +3628,23 @@ function _renderSettings(){
     _setRow('Personality','Who Sentinel sounds like',_setSelect('Personality',people,currentPersonality,function(v){setPersonality(v);}))
   ]);
   var look=_setSection('Appearance',[
+    _setRow('Low resource mode','Turns off animations, glow and snow to use less CPU and memory. Applies at once.',_setSwitch('Low resource mode',lowRes,function(){toggleLowRes();_renderSettings();})),
     _setRow('Theme','Colour scheme',_setSelect('Theme',modes,activeTheme,function(v){applyTheme(v);})),
     _setRow('Start on','Chat or the orb screen',_setSelect('Start on',[['chat','Chat'],['orb','Orb']],_view,function(v){showView(v);}))
   ]);
   pn.appendChild(voice); pn.appendChild(assistant); pn.appendChild(_phoneSection()); pn.appendChild(look); pn.appendChild(_linkSection());
+}
+// Low resource mode: saved in this browser. Turns off CSS animations/glow/blur/snow and slows the orb redraw.
+var lowRes=(function(){try{return localStorage.getItem('sentinel_lowres')==='1';}catch(e){return false;}})();
+function applyLowRes(){
+  document.body.classList.toggle('lowres',lowRes);
+  if(typeof _orbTimer!=='undefined' && _orbTimer){ clearInterval(_orbTimer); _orbTimer=null; }
+  if(typeof _view!=='undefined' && _view==='orb'){ orbTick(); _orbTimer=setInterval(orbTick, lowRes?500:100); }
+}
+function toggleLowRes(){
+  lowRes=!lowRes;
+  try{localStorage.setItem('sentinel_lowres',lowRes?'1':'0');}catch(e){}
+  applyLowRes();
 }
 // Linked machines: shows whether the other Sentinel machine is reachable and what the last chat sync did.
 var _linkBox=null;
@@ -3998,6 +4014,7 @@ async function init(){
   }
 }
 init();
+applyLowRes();
 setInterval(updateSys,8000);
 updateDeviceCount();
 setInterval(updateDeviceCount,15000);
