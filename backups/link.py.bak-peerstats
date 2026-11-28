@@ -1,0 +1,352 @@
+"""
+Sentinel V2 — link between papa-s and MemEx.
+
+Each machine keeps its own copy of saved chats (chats.py). A background pass, and
+POST /link/sync, compares each chat's `updated` time with the other machine's and
+copies the newer copy across, so the most recent change wins.
+
+POST /link/run        forward a command to the other machine's /exec (its safe() still applies)
+POST /link/open       open a web link or desktop app on THIS machine's screen
+POST /link/open-peer  ask the other machine to open it
+GET  /link/status     reachability, clock difference, last sync result
+GET  /link/time       this machine's clock (used for the clock check)
+
+Peer settings come from the environment or ~/.config/sentinel/.env, never from chat:
+  SENTINEL_PEER_URL=http://<other machine's Tailscale IP>:8765
+  SENTINEL_PEER_KEY=<other machine's SENTINEL_API_KEY>
+"""
+import json, os, re, shutil, subprocess, threading, time
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+import chats as chat_store
+def _desktop_env(env):
+    """Make sure a program started from here can reach this machine's screen (DISPLAY and XAUTHORITY)."""
+    env = dict(env)
+    env.setdefault("DISPLAY", ":0")
+    xauth = Path.home() / ".Xauthority"
+    if "XAUTHORITY" not in env and xauth.exists():
+        env["XAUTHORITY"] = str(xauth)
+    return env
+
+SYNC_EVERY_SECONDS = 60
+SKEW_WARN_MS = 3000
+_URL_RE = re.compile(r"^https?://[^\s'\"<>]{1,500}$")
+_APP_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
+_state_lock = threading.Lock()
+_state = {"last_sync_ms": None, "last_result": None, "last_error": None}
+
+
+def _now_ms():
+    return round(time.time() * 1000)
+
+
+def _read_env_file():
+    values = {}
+    cfg = Path.home() / ".config" / "sentinel" / ".env"
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                values[k.strip()] = v.strip().strip('"')
+    return values
+
+
+def _peer():
+    env = _read_env_file()
+    url = (os.environ.get("SENTINEL_PEER_URL") or env.get("SENTINEL_PEER_URL") or "").rstrip("/")
+    key = os.environ.get("SENTINEL_PEER_KEY") or env.get("SENTINEL_PEER_KEY") or ""
+    return url, key
+
+
+def _peer_call(method, path, timeout=10, **kw):
+    url, key = _peer()
+    if not url or not key:
+        raise HTTPException(503, "The other machine isn't set up yet (SENTINEL_PEER_URL / SENTINEL_PEER_KEY missing).")
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            r = c.request(method, url + path, headers={"x-api-key": key}, **kw)
+    except httpx.HTTPError:
+        raise HTTPException(502, "The other machine is unreachable.")
+    if r.status_code >= 400:
+        if r.status_code == 401:
+            raise HTTPException(502, "The other machine rejected the link key.")
+        try:
+            detail = r.json().get("detail")
+        except Exception:
+            detail = None
+        status = r.status_code if r.status_code < 500 else 502
+        raise HTTPException(status, detail or f"The other machine returned {r.status_code}.")
+    return r.json()
+
+
+def _local_chats():
+    out = {}
+    with chat_store._lock:
+        if chat_store.CHATS_DIR.is_dir():
+            for p in chat_store.CHATS_DIR.glob("*.json"):
+                if p.name.startswith("."):
+                    continue
+                try:
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                    out[d.get("id", p.stem)] = d
+                except Exception:
+                    continue
+    return out
+
+
+def _pull_chat(cid, full):
+    path = chat_store._path(cid)
+    with chat_store._lock:
+        chat_store._write_atomic(path, full)
+        chat_store._cache.pop(str(path), None)
+        chat_store.clear_tombstone(cid)
+
+
+def _delete_local(cid, when_ms):
+    path = chat_store._path(cid)
+    with chat_store._lock:
+        if path.is_file():
+            path.unlink()
+        chat_store._cache.pop(str(path), None)
+        chat_store.write_tombstone(cid, when_ms)
+
+
+def _push(cid, local, remote):
+    _peer_call("PUT", f"/chats/{cid}", json={
+        "messages": local.get("messages", []), "title": local.get("title"),
+        "created": local.get("created"), "updated": local.get("updated") or 0, "keep_time": True})
+    if remote and local.get("title") and remote.get("title") != local.get("title"):
+        _peer_call("POST", f"/chats/{cid}/rename", json={"title": local["title"]})
+
+
+def _side_state(chat, tomb_ms):
+    """The latest thing that happened to one chat on one machine: a save ("chat") or a deletion ("tomb")."""
+    if chat is not None:
+        return ("chat", chat.get("updated") or 0)
+    if tomb_ms:
+        return ("tomb", tomb_ms)
+    return None
+
+
+def sync_chats():
+    """Newest change wins: whichever happened last to a chat (a save or a deletion) is copied across."""
+    remote_chats = {c["id"]: c for c in _peer_call("GET", "/chats")["chats"]}
+    remote_tombs = _peer_call("GET", "/chats-deleted")
+    local_chats = _local_chats()
+    local_tombs = chat_store.read_tombstones()
+    counts = {"pulled": 0, "pushed": 0, "deleted_here": 0, "deleted_there": 0}
+    ids = set(local_chats) | set(remote_chats) | set(local_tombs) | set(remote_tombs)
+    for cid in ids:
+        if not chat_store._ID_RE.match(str(cid)):
+            continue
+        l = _side_state(local_chats.get(cid), local_tombs.get(cid))
+        r = _side_state(remote_chats.get(cid), remote_tombs.get(cid))
+        if l is None and r is None:
+            continue
+        if l == r:
+            continue
+        if l is None or (r is not None and r[1] > l[1]):
+            side, newer = "remote", r
+        else:
+            side, newer = "local", l
+        if side == "local":
+            if newer[0] == "chat":
+                if r is None or r[0] == "tomb" or r[1] < newer[1]:
+                    _push(cid, local_chats[cid], remote_chats.get(cid))
+                    counts["pushed"] += 1
+            elif r is not None and r[0] == "chat":
+                _peer_call("DELETE", f"/chats/{cid}")
+                counts["deleted_there"] += 1
+        else:
+            if newer[0] == "chat":
+                _pull_chat(cid, _peer_call("GET", f"/chats/{cid}"))
+                counts["pulled"] += 1
+            elif l is not None and l[0] == "chat":
+                _delete_local(cid, newer[1])
+                counts["deleted_here"] += 1
+    return counts
+
+
+def status():
+    url, key = _peer()
+    configured = bool(url and key)
+    reachable, skew = False, None
+    if configured:
+        t0 = _now_ms()
+        try:
+            t = _peer_call("GET", "/link/time", timeout=5)
+            t1 = _now_ms()
+            reachable = True
+            skew = t["time_ms"] - (t0 + t1) // 2
+        except HTTPException:
+            reachable = False
+    with _state_lock:
+        st = dict(_state)
+    return {"configured": configured, "reachable": reachable, "clock_skew_ms": skew,
+            "clock_warning": skew is not None and abs(skew) > SKEW_WARN_MS,
+            "last_sync_ms": st["last_sync_ms"], "last_result": st["last_result"],
+            "last_error": st["last_error"]}
+
+
+def _record(result=None, error=None):
+    with _state_lock:
+        _state["last_sync_ms"] = _now_ms()
+        _state["last_result"] = result
+        _state["last_error"] = error
+
+
+def _sync_once():
+    url, key = _peer()
+    if not (url and key):
+        return
+    try:
+        _record(result=sync_chats())
+    except HTTPException as e:
+        _record(error=str(e.detail))
+    except Exception:
+        _record(error="Sync failed unexpectedly.")
+
+
+def _loop():
+    while True:
+        _sync_once()
+        time.sleep(SYNC_EVERY_SECONDS)
+
+
+def start_background_sync():
+    threading.Thread(target=_loop, daemon=True, name="link-sync").start()
+
+
+def open_here(target):
+    t = (target or "").strip()
+    if _URL_RE.match(t):
+        argv = ["xdg-open", t]
+    elif _APP_RE.match(t):
+        argv = ["gtk-launch", t]
+    else:
+        raise HTTPException(400, "Give a web address (https://...) or a desktop app name.")
+    if not shutil.which(argv[0]):
+        raise HTTPException(500, f"{argv[0]} isn't installed on this machine.")
+    env = _desktop_env(os.environ.copy())
+    subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    return {"ok": True, "opened": t}
+
+
+class RunReq(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout: Optional[int] = 15
+
+
+class OpenReq(BaseModel):
+    target: str
+
+
+# Apps the phone-facing UI may ask the other machine to open. Only names listed here are accepted.
+# Each entry is the .desktop id on the other machine (gtk-launch runs it). Add more here later.
+PEER_APPS = {
+    "spotify": {"label": "Spotify", "desktop": "spotify"},
+}
+
+
+class PeerAppReq(BaseModel):
+    app: str
+
+
+def _launchable_apps():
+    """Desktop apps this machine can start: installed .desktop entries that aren't hidden."""
+    found = {}
+    for d in (Path("/usr/share/applications"), Path.home() / ".local" / "share" / "applications"):
+        if not d.is_dir():
+            continue
+        for p in d.glob("*.desktop"):
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if not re.search(r"^Type=Application\s*$", text, re.M) or not re.search(r"^Exec=", text, re.M):
+                continue
+            if re.search(r"^(NoDisplay|Hidden)=true\s*$", text, re.M | re.I):
+                continue
+            if not _APP_RE.match(p.stem):
+                continue
+            m = re.search(r"^Name=(.+)$", text, re.M)
+            found.setdefault(p.stem, m.group(1).strip() if m else p.stem)
+    return [{"id": k, "label": v} for k, v in sorted(found.items(), key=lambda kv: kv[1].lower())]
+
+
+def _peer_all_apps():
+    """True on a machine that may open every app the other machine has (SENTINEL_PEER_ALL_APPS=1)."""
+    v = os.environ.get("SENTINEL_PEER_ALL_APPS") or _read_env_file().get("SENTINEL_PEER_ALL_APPS") or ""
+    return v.strip().lower() in ("1", "true", "yes")
+
+
+def peer_app_list():
+    """Apps the other machine can open: everything it has installed, or the curated list."""
+    if _peer_all_apps():
+        return _peer_call("GET", "/link/apps", timeout=10).get("apps", [])
+    return [{"id": k, "label": v["label"]} for k, v in PEER_APPS.items()]
+
+
+def open_peer_app(app):
+    """Ask the other machine to open an app. Used by the button and by chat/voice commands."""
+    app_id = (app or "").strip()
+    if _peer_all_apps():
+        if not any(a["id"] == app_id for a in peer_app_list()):
+            raise HTTPException(400, "The other machine doesn't have that app.")
+        return _peer_call("POST", "/link/open", json={"target": app_id})
+    entry = PEER_APPS.get(app_id)
+    if not entry:
+        raise HTTPException(400, "That app isn't on the linked list.")
+    return _peer_call("POST", "/link/open", json={"target": entry["desktop"]})
+
+
+def make_router(verify_key) -> APIRouter:
+    r = APIRouter(dependencies=[Depends(verify_key)])
+
+    @r.get("/link/time")
+    def link_time():
+        return {"time_ms": _now_ms()}
+
+    @r.get("/link/status")
+    def link_status():
+        return status()
+
+    @r.post("/link/sync")
+    def link_sync():
+        result = sync_chats()
+        _record(result=result)
+        return {"ok": True, **result}
+
+    @r.post("/link/run")
+    def link_run(req: RunReq):
+        return _peer_call("POST", "/exec", timeout=(req.timeout or 15) + 10,
+                          json=req.model_dump(exclude_none=True))
+
+    @r.post("/link/open")
+    def link_open(req: OpenReq):
+        return open_here(req.target)
+
+    @r.post("/link/open-peer")
+    def link_open_peer(req: OpenReq):
+        return _peer_call("POST", "/link/open", json={"target": req.target})
+
+    @r.get("/link/apps")
+    def link_apps():
+        return {"apps": _launchable_apps()}
+
+    @r.get("/link/peer-apps")
+    def link_peer_apps():
+        return {"apps": peer_app_list()}
+
+    @r.post("/link/open-peer-app")
+    def link_open_peer_app(req: PeerAppReq):
+        return open_peer_app(req.app)
+
+    return r

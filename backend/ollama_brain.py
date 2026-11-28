@@ -4,7 +4,8 @@ import json
 import logging
 import re
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+import os as _os
+OLLAMA_URL = _os.environ.get("SENTINEL_OLLAMA_URL", "http://localhost:11434").rstrip("/") + "/api/chat"
 MODEL = "mistral:latest"
 
 # Tool-calling prompt (used by /api/chat in backend/main.py)

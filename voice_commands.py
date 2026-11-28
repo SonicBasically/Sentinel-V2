@@ -429,8 +429,37 @@ def answer_choice(text, choices):
     return _result("I found %s but couldn't launch it." % pick["name"], False)
 
 
+def _run_peer(app_text, target):
+    """'open <app> on <other machine>' — the apps the other machine offers (link.peer_app_list)."""
+    import link as link_lib
+    me = re.sub(r"[^a-z]", "", (os.environ.get("SENTINEL_MACHINE_NAME") or link_lib._read_env_file().get("SENTINEL_MACHINE_NAME", "")).lower())
+    if me and re.sub(r"[^a-z]", "", target) == me:
+        return _result("That app is on this computer already.", False)
+    want = app_text.strip().lower()
+    try:
+        apps = link_lib.peer_app_list()
+    except Exception as e:
+        return _result(str(getattr(e, "detail", "") or "The other machine is unreachable."), False)
+    for a in apps:
+        if want in (a["id"].lower(), a["label"].lower()):
+            try:
+                link_lib.open_peer_app(a["id"])
+            except Exception as e:
+                return _result(str(getattr(e, "detail", "") or "Could not open %s on the other machine." % a["label"]), False)
+            return _result("Opening %s on the other machine." % a["label"])
+    return _result("I couldn't find %s on the other machine." % app_text.strip(), False)
+
+
+_PEER_RE = re.compile(r"^(?:please )?(?:open|launch|start|run) (?P<app>.+?) (?:on|in|at) (?:the |my )?"
+                      r"(?P<target>mem ?ex|papa[ -]?s(?: pc)?|main (?:computer|pc|machine)|main|desktop|"
+                      r"other (?:machine|computer|pc)|computer 2|second computer)$")
+
+
 def try_command(text, app_aliases=None):
     """Run a recognized command. Returns None if `text` is not a command."""
+    peer = _PEER_RE.match((text or "").strip().lower().rstrip(".!?"))
+    if peer:
+        return _run_peer(peer.group("app"), peer.group("target"))
     intent = parse_command(text)
     if not intent:
         return None

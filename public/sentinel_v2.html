@@ -3557,7 +3557,31 @@ function _linkSection(){
   btn.onclick=function(){ box.textContent='Syncing...'; bfetch(backend()+'/link/sync',{method:'POST'}).then(function(){ _linkLoad(box); }).catch(function(){ _linkLoad(box); }); };
   var ctl=_setEl('div','set-ctl'); ctl.appendChild(box); ctl.appendChild(btn);
   _linkLoad(box);
-  return _setSection('Linked machines',[_setRow('Other machine','Chats and commands go between the two machines',ctl)]);
+  var appBox=_setEl('div','set-ctl');
+  var appMsg=_setEl('div','set-hint','');
+  var appWrap=_setEl('div','set-ctl'); appWrap.appendChild(appBox); appWrap.appendChild(appMsg);
+  _linkApps(appBox, appMsg);
+  return _setSection('Linked machines',[
+    _setRow('Other machine','Chats and commands go between the two machines',ctl),
+    _setRow('Open on the other machine','Apps from the linked list',appWrap)
+  ]);
+}
+// Curated apps only: the server accepts names from its PEER_APPS list and nothing else.
+function _linkApps(box, msg){
+  bfetch(backend()+'/link/peer-apps').then(function(r){return r.ok?r.json():null;}).then(function(d){
+    box.textContent='';
+    if(!d||!d.apps||!d.apps.length){ box.textContent='No apps listed'; return; }
+    d.apps.forEach(function(a){
+      var b=_setEl('button','set-btn','Open '+a.label);
+      b.onclick=function(){
+        msg.textContent='Opening '+a.label+'...';
+        bfetch(backend()+'/link/open-peer-app',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({app:a.id})})
+          .then(function(r){ if(!r.ok) throw new Error(); msg.textContent=a.label+' opened on the other machine.'; })
+          .catch(function(){ msg.textContent='Could not open '+a.label+' (is the other machine online?)'; });
+      };
+      box.appendChild(b);
+    });
+  }).catch(function(){ box.textContent='Apps unavailable'; });
 }
 function _linkText(d){
   if(!d.configured) return 'Not set up yet (add the other machine to ~/.config/sentinel/.env)';
@@ -3810,9 +3834,11 @@ async function updateDeviceCount(){
   }catch(e){}
 }
 
+// The MemEx window opens this page with ?stats=peer, so the stats panel shows the other machine (MemEx).
+var STATS_FROM_PEER = /(^|[?&])stats=peer(&|$)/.test(window.location.search);
 async function updateSys(){
   try{
-    var r=await bfetch(backend()+'/system/info',{signal:AbortSignal.timeout(4000)});
+    var r=await bfetch(backend()+(STATS_FROM_PEER?'/link/peer-stats':'/system/info'),{signal:AbortSignal.timeout(4000)});
     if(!r.ok) return;
     var d=await r.json();
     document.getElementById('s-cpu').textContent=d.cpu.usage_pct+'%'+(d.cpu.temp_c!=null?' · '+d.cpu.temp_c+'°C':'');setBar('s-cpu-b',d.cpu.usage_pct);

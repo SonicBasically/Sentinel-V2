@@ -248,6 +248,65 @@ class OpenReq(BaseModel):
     target: str
 
 
+# Apps the phone-facing UI may ask the other machine to open. Only names listed here are accepted.
+# Each entry is the .desktop id on the other machine (gtk-launch runs it). Add more here later.
+PEER_APPS = {
+    "spotify": {"label": "Spotify", "desktop": "spotify"},
+}
+
+
+class PeerAppReq(BaseModel):
+    app: str
+
+
+def _launchable_apps():
+    """Desktop apps this machine can start: installed .desktop entries that aren't hidden."""
+    found = {}
+    for d in (Path("/usr/share/applications"), Path.home() / ".local" / "share" / "applications"):
+        if not d.is_dir():
+            continue
+        for p in d.glob("*.desktop"):
+            try:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if not re.search(r"^Type=Application\s*$", text, re.M) or not re.search(r"^Exec=", text, re.M):
+                continue
+            if re.search(r"^(NoDisplay|Hidden)=true\s*$", text, re.M | re.I):
+                continue
+            if not _APP_RE.match(p.stem):
+                continue
+            m = re.search(r"^Name=(.+)$", text, re.M)
+            found.setdefault(p.stem, m.group(1).strip() if m else p.stem)
+    return [{"id": k, "label": v} for k, v in sorted(found.items(), key=lambda kv: kv[1].lower())]
+
+
+def _peer_all_apps():
+    """True on a machine that may open every app the other machine has (SENTINEL_PEER_ALL_APPS=1)."""
+    v = os.environ.get("SENTINEL_PEER_ALL_APPS") or _read_env_file().get("SENTINEL_PEER_ALL_APPS") or ""
+    return v.strip().lower() in ("1", "true", "yes")
+
+
+def peer_app_list():
+    """Apps the other machine can open: everything it has installed, or the curated list."""
+    if _peer_all_apps():
+        return _peer_call("GET", "/link/apps", timeout=10).get("apps", [])
+    return [{"id": k, "label": v["label"]} for k, v in PEER_APPS.items()]
+
+
+def open_peer_app(app):
+    """Ask the other machine to open an app. Used by the button and by chat/voice commands."""
+    app_id = (app or "").strip()
+    if _peer_all_apps():
+        if not any(a["id"] == app_id for a in peer_app_list()):
+            raise HTTPException(400, "The other machine doesn't have that app.")
+        return _peer_call("POST", "/link/open", json={"target": app_id})
+    entry = PEER_APPS.get(app_id)
+    if not entry:
+        raise HTTPException(400, "That app isn't on the linked list.")
+    return _peer_call("POST", "/link/open", json={"target": entry["desktop"]})
+
+
 def make_router(verify_key) -> APIRouter:
     r = APIRouter(dependencies=[Depends(verify_key)])
 
@@ -277,5 +336,22 @@ def make_router(verify_key) -> APIRouter:
     @r.post("/link/open-peer")
     def link_open_peer(req: OpenReq):
         return _peer_call("POST", "/link/open", json={"target": req.target})
+
+    @r.get("/link/apps")
+    def link_apps():
+        return {"apps": _launchable_apps()}
+
+    @r.get("/link/peer-apps")
+    def link_peer_apps():
+        return {"apps": peer_app_list()}
+
+    @r.post("/link/open-peer-app")
+    def link_open_peer_app(req: PeerAppReq):
+        return open_peer_app(req.app)
+
+    @r.get("/link/peer-stats")
+    def link_peer_stats():
+        # The other machine's own system figures (disk, uptime, CPU...), for a window opened there.
+        return _peer_call("GET", "/system/info", timeout=6)
 
     return r
